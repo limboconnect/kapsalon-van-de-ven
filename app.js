@@ -181,20 +181,43 @@ async function fetchRange(from, to) {
   return { appts: a.data, afw: w.data };
 }
 
-function huidigBereik() {
-  if (S.view === 'week') {
-    const ma = monday(S.date);
+function bereikVoor(view, date) {
+  if (view === 'week') {
+    const ma = monday(date);
     return { from: addDays(ma, 1), to: addDays(ma, 6) };
   }
-  return { from: S.date, to: addDays(S.date, 1) };
+  return { from: date, to: addDays(date, 1) };
 }
+const huidigBereik = () => bereikVoor(S.view, S.date);
+
+// Cache van opgehaalde dagen/weken: wisselen en vegen gaat dan direct
+const cache = new Map();
+const bereikSleutel = (view, date) => view + key(bereikVoor(view, date).from);
+const buurDatum = (view, date, dir) => (view === 'week' ? addDays(date, 7 * dir) : nextOpen(addDays(date, dir), dir));
 
 async function loadRange() {
-  const { from, to } = huidigBereik();
+  const view = S.view, date = S.date;
+  const { from, to } = bereikVoor(view, date);
   const r = await fetchRange(from, to);
-  S.appts = r.appts;
-  S.afw = r.afw;
+  cache.set(bereikSleutel(view, date), r);
+  if (S.view === view && key(S.date) === key(date)) { S.appts = r.appts; S.afw = r.afw; } // intussen niet verder geveegd
 }
+
+// Vorige en volgende dag/week alvast ophalen
+async function haalBurenOp() {
+  if (!(S.view === 'dag' || S.view === 'week')) return;
+  for (const dir of [1, -1]) {
+    const d = buurDatum(S.view, S.date, dir);
+    const k = bereikSleutel(S.view, d);
+    if (cache.has(k)) continue;
+    const { from, to } = bereikVoor(S.view, d);
+    try { cache.set(k, await fetchRange(from, to)); } catch { /* volgende keer */ }
+  }
+}
+
+// Alleen opnieuw tekenen als er echt iets veranderd is
+let laatstGetekend = '';
+const vingerafdruk = () => JSON.stringify([S.view, key(S.date), S.appts, S.afw, S.meds, S.beh, S.sluit]);
 
 async function loadKlanten() {
   let q = sb.from('klanten').select('*').order('naam').limit(60);
@@ -212,10 +235,15 @@ async function loadAfwLijst() {
   S.afwLijst = data;
 }
 
-async function refresh() {
+async function refresh(opts = {}) {
   try {
-    if (S.view === 'dag' || S.view === 'week') await Promise.all([loadRange(), loadBase()]);
-    else if (S.view === 'klanten') await loadKlanten();
+    if (S.view === 'dag' || S.view === 'week') {
+      await Promise.all([loadRange(), opts.basis ? loadBase() : null]);
+      if (vingerafdruk() !== laatstGetekend) render();
+      haalBurenOp();
+      return;
+    }
+    if (S.view === 'klanten') await loadKlanten();
     else if (S.view === 'instellingen') await Promise.all([loadBase(), loadAfwLijst()]);
     render();
   } catch (e) { toast(foutmelding(e)); }
@@ -258,6 +286,7 @@ function render() {
   const bewaar = oud && oud.dataset.view === S.view + key(S.date) ? oud.scrollTop : null;
   app.innerHTML = shellHtml();
   S.anim = null;
+  laatstGetekend = (S.view === 'dag' || S.view === 'week') ? vingerafdruk() : '';
   const sc = document.getElementById('scroll');
   if (sc) {
     if (bewaar !== null) sc.scrollTop = bewaar;
@@ -812,7 +841,9 @@ async function bewaarAfw() {
 
 // ---------- Naar een andere datum ----------
 async function naarDatum(anim = null) {
-  S.appts = []; S.afw = [];          // geen afspraken van de vorige dag tonen
+  // uit de cache tonen als die er is, anders leeg (nooit de afspraken van de vorige dag)
+  const c = (S.view === 'dag' || S.view === 'week') ? cache.get(bereikSleutel(S.view, S.date)) : null;
+  S.appts = c ? c.appts : []; S.afw = c ? c.afw : [];
   S.anim = anim;
   render();
   await refresh();
@@ -820,28 +851,55 @@ async function naarDatum(anim = null) {
 
 // Eén dag (of week) vooruit/achteruit; anim = veeg-animatie
 async function verschuif(dir, anim = null) {
-  S.date = S.view === 'week' ? addDays(S.date, 7 * dir) : nextOpen(addDays(S.date, dir), dir);
+  S.date = buurDatum(S.view, S.date, dir);
   await naarDatum(anim);
 }
 
-// Vegen naar links/rechts in de agenda
+// Vegen naar links/rechts in de agenda; het scherm volgt de vinger
 let veeg = null;
+function veegTerug(main) {
+  if (!main) return;
+  main.style.transition = 'transform .2s ease-out, opacity .2s';
+  main.style.transform = '';
+  main.style.opacity = '';
+}
 document.addEventListener('touchstart', (e) => {
   veeg = null;
   if (S.sheet || !S.session || !(S.view === 'dag' || S.view === 'week')) return;
-  if (!e.target.closest('main') || e.touches.length !== 1) return;
+  const main = e.target.closest('main');
+  if (!main || e.touches.length !== 1) return;
   const t = e.touches[0];
-  veeg = { x: t.clientX, y: t.clientY, t: Date.now() };
+  veeg = { x: t.clientX, y: t.clientY, t: Date.now(), richting: null, main };
+}, { passive: true });
+document.addEventListener('touchmove', (e) => {
+  if (!veeg) return;
+  const t = e.touches[0];
+  const dx = t.clientX - veeg.x, dy = t.clientY - veeg.y;
+  if (!veeg.richting) {
+    if (Math.abs(dx) < 10 && Math.abs(dy) < 10) return;
+    veeg.richting = Math.abs(dx) > 1.3 * Math.abs(dy) ? 'h' : 'v';
+  }
+  if (veeg.richting !== 'h') return;
+  veeg.main.style.transition = 'none';
+  veeg.main.style.transform = `translateX(${dx}px)`;
+  veeg.main.style.opacity = String(1 - Math.min(Math.abs(dx) / 700, 0.35));
 }, { passive: true });
 document.addEventListener('touchend', (e) => {
   if (!veeg) return;
-  const t = e.changedTouches[0];
-  const dx = t.clientX - veeg.x, dy = t.clientY - veeg.y, dt = Date.now() - veeg.t;
-  veeg = null;
-  if (Math.abs(dx) > 60 && Math.abs(dx) > 1.5 * Math.abs(dy) && dt < 700) {
-    verschuif(dx < 0 ? 1 : -1, dx < 0 ? 'links' : 'rechts');
+  const v = veeg; veeg = null;
+  if (v.richting !== 'h') return;
+  const dx = e.changedTouches[0].clientX - v.x, dt = Date.now() - v.t;
+  if (Math.abs(dx) > 70 || (Math.abs(dx) > 35 && dt < 250)) {
+    const dir = dx < 0 ? 1 : -1;
+    v.main.style.transition = 'transform .12s ease-in, opacity .12s';
+    v.main.style.transform = `translateX(${dx < 0 ? -45 : 45}%)`;
+    v.main.style.opacity = '0';
+    setTimeout(() => verschuif(dir, dir > 0 ? 'links' : 'rechts'), 110);
+  } else {
+    veegTerug(v.main);
   }
 }, { passive: true });
+document.addEventListener('touchcancel', () => { if (veeg) { veegTerug(veeg.main); veeg = null; } }, { passive: true });
 
 // ---------- Maandkalender ----------
 function openKalender() {
@@ -1166,15 +1224,16 @@ async function start() {
     await loadRange();
   } catch (e) { toast(foutmelding(e)); }
   render();
+  haalBurenOp();
   if (!kanaal) {
     kanaal = sb.channel('salon')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'afspraken' }, (p) => {
         // belletje bij een nieuwe afspraak die een collega (ander apparaat) maakte
         if (p?.eventType === 'INSERT' && Date.now() - eigenWijziging > 5000) speel('nieuw');
-        refresh();
+        cache.clear(); refresh();
       })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'afwezigheid' }, () => refresh())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'sluitingsdagen' }, () => refresh())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'afwezigheid' }, () => { cache.clear(); refresh(); })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'sluitingsdagen' }, () => { cache.clear(); refresh({ basis: true }); })
       .subscribe();
   }
 }
@@ -1192,7 +1251,7 @@ sb.auth.onAuthStateChange((event, session) => {
 
 // Elke minuut de "nu"-lijn bijwerken; bij terugkeren naar de app verversen
 setInterval(() => { if (S.session && S.view === 'dag' && !S.sheet) render(); }, 60000);
-document.addEventListener('visibilitychange', () => { if (!document.hidden && S.session) refresh(); });
+document.addEventListener('visibilitychange', () => { if (!document.hidden && S.session) { cache.clear(); refresh({ basis: true }); } });
 
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 

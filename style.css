@@ -191,3 +191,7 @@ main.veeg-rechts { animation: veegR .22s ease-out; }
   .top { padding: 20px 24px 12px; }
   .dayhead, .daygrid, .weekhead, .weekgrid, .legend { padding-left: 24px; padding-right: 24px; }
 }
+
+/* Vegen: browser regelt alleen verticaal scrollen, horizontaal doet de app */
+main, main .scroll { touch-action: pan-y; }
+main { will-change: transform; }
