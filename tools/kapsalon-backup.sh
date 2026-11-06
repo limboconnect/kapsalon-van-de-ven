@@ -35,36 +35,65 @@ fi
 
 # --- 2. Alle tabellen ophalen (per 1000 rijen) ------------------------
 FOUTEN=0
-for TABEL in medewerkers behandelingen klanten afspraken afspraak_behandelingen afwezigheid sluitingsdagen; do
+TABELLEN="medewerkers behandelingen klanten afspraken afspraak_behandelingen afwezigheid sluitingsdagen"
+KOPPEN="$(mktemp)"
+for TABEL in $TABELLEN; do
   OFFSET=0
   DEEL=0
-  TOTAAL=0
-  while :; do
+  TOTAAL="?"
+  # Pagina's van 1000 rijen ophalen tot er een lege pagina komt
+  while [ "$DEEL" -lt 1000 ]; do
     BESTAND="$DOEL/${TABEL}_$(printf '%03d' $DEEL).json"
-    CODE="$(curl -sS -o "$BESTAND" -w '%{http_code}' \
+    CODE="$(curl -sS -o "$BESTAND" -D "$KOPPEN" -w '%{http_code}' \
       "$SUPABASE_URL/rest/v1/$TABEL?select=*&limit=1000&offset=$OFFSET" \
-      -H "apikey: $SUPABASE_KEY" -H "Authorization: Bearer $TOKEN")"
-    if [ "$CODE" != "200" ]; then
+      -H "apikey: $SUPABASE_KEY" -H "Authorization: Bearer $TOKEN" -H "Prefer: count=exact")"
+    if [ "$CODE" != "200" ] && [ "$CODE" != "206" ]; then
       log "FOUT: $TABEL (HTTP $CODE): $(head -c 300 "$BESTAND")"
       FOUTEN=$((FOUTEN + 1))
       break
     fi
-    # Aantal rijen tellen (aantal objecten op het hoogste niveau)
-    AANTAL="$(grep -o '}, *{' "$BESTAND" | wc -l)"
-    if [ "$(tr -d ' \n\r' < "$BESTAND" | head -c 2)" = "[]" ]; then
+    # Werkelijk aantal rijen volgens de database (Content-Range: 0-999/2504)
+    if [ "$DEEL" -eq 0 ]; then
+      T="$(tr -d '\r' < "$KOPPEN" | sed -n 's/^[Cc]ontent-[Rr]ange:.*\/\([0-9][0-9]*\).*/\1/p')"
+      [ -n "$T" ] && TOTAAL="$T"
+    fi
+    if [ "$(tr -d ' \n\r\t' < "$BESTAND" | head -c 2)" = "[]" ]; then
       rm -f "$BESTAND"
       break
     fi
-    AANTAL=$((AANTAL + 1))
-    TOTAAL=$((TOTAAL + AANTAL))
-    [ "$AANTAL" -lt 1000 ] && break
     OFFSET=$((OFFSET + 1000))
     DEEL=$((DEEL + 1))
   done
-  log "$TABEL: ca. $TOTAAL rijen"
+  log "$TABEL: $TOTAAL rijen in $DEEL deel/delen"
 done
+rm -f "$KOPPEN"
 
-# --- 3. Uitloggen en oude back-ups opruimen ---------------------------
+# --- 3. Eén compleet bestand voor herstel (export.json) ----------------
+# Zelfde opbouw als sql/export.sql, te gebruiken met sql/herstel.sql
+if [ "$FOUTEN" -eq 0 ]; then
+  EXPORT="$DOEL/export.json"
+  {
+    printf '{"export_datum":"%s"' "$(date '+%Y-%m-%d %H:%M')"
+    for TABEL in $TABELLEN; do
+      printf ',\n"%s":[' "$TABEL"
+      EERSTE=1
+      for BESTAND in "$DOEL/${TABEL}"_*.json; do
+        [ -f "$BESTAND" ] || continue
+        # buitenste [ ] weghalen en delen aan elkaar plakken
+        INHOUD="$(tr -d '\r' < "$BESTAND" | sed -e '1s/^[[:space:]]*\[//' -e '$s/\][[:space:]]*$//')"
+        [ -z "$(echo "$INHOUD" | tr -d '[:space:]')" ] && continue
+        [ "$EERSTE" -eq 1 ] || printf ','
+        printf '%s' "$INHOUD"
+        EERSTE=0
+      done
+      printf ']'
+    done
+    printf '}\n'
+  } > "$EXPORT"
+  log "export.json gemaakt (voor herstel in één keer)"
+fi
+
+# --- 4. Uitloggen en oude back-ups opruimen ---------------------------
 curl -sS -o /dev/null -X POST "$SUPABASE_URL/auth/v1/logout" \
   -H "apikey: $SUPABASE_KEY" -H "Authorization: Bearer $TOKEN"
 
