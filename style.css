@@ -70,7 +70,11 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .afw { position: absolute; left: 2px; right: 2px; border-radius: 7px; border: 1px dashed var(--line); background: repeating-linear-gradient(135deg, rgba(239,227,222,.07) 0 6px, transparent 6px 12px); color: var(--muted); font-size: 12px; padding: 4px 6px; overflow: hidden; }
 .nowline { position: absolute; left: 0; right: 0; height: 2px; background: var(--accent); pointer-events: none; z-index: 2; }
 .nowline::before { content: ''; position: absolute; left: -4px; top: -3px; width: 8px; height: 8px; border-radius: 4px; background: var(--accent); }
-.closed { padding: 60px 24px; text-align: center; color: var(--muted); }
+.closed { padding: 60px 24px; text-align: center; color: var(--muted); line-height: 1.6; }
+.banner { margin: 0 16px 8px; padding: 10px 14px; border-radius: 10px; background: #4A2E28; border: 1px solid #6A3F38; font-size: 14px; }
+.wdicht { display: flex; align-items: flex-start; justify-content: center; padding-top: 16px; text-align: center; font-size: 12px; color: var(--muted); border: 1px dashed var(--line);
+  background: repeating-linear-gradient(135deg, rgba(239,227,222,.06) 0 6px, transparent 6px 12px); }
+.row .acts { display: flex; gap: 4px; flex: none; }
 
 /* ---------- Weekoverzicht ---------- */
 .weekhead, .weekgrid { display: grid; grid-template-columns: 40px repeat(5, minmax(0, 1fr)); gap: 8px; padding: 0 16px; }

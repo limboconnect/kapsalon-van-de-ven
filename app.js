@@ -80,8 +80,38 @@ const S = {
   kq: '',
   klanten: [],
   afwLijst: [],
+  sluit: [],
   sheet: null,
 };
+
+// Sluitingsdag (gesloten) op deze datum, of null
+const geslotenOp = (d) => {
+  const k = key(d);
+  return S.sluit.find((s) => s.gesloten && s.van <= k && k <= s.tot) || null;
+};
+
+// Nederlandse feestdagen die op een openingsdag (di–za) vallen
+function pasen(j) { // anonieme Gregoriaanse berekening
+  const a = j % 19, b = Math.floor(j / 100), c = j % 100, d = Math.floor(b / 4), e = b % 4;
+  const f = Math.floor((b + 8) / 25), g = Math.floor((b - f + 1) / 3), h = (19 * a + b - d - g + 15) % 30;
+  const i = Math.floor(c / 4), k = c % 4, l = (32 + 2 * e + 2 * i - h - k) % 7, m = Math.floor((a + 11 * h + 22 * l) / 451);
+  const maand = Math.floor((h + l - 7 * m + 114) / 31), dag = ((h + l - 7 * m + 114) % 31) + 1;
+  return new Date(j, maand - 1, dag);
+}
+function feestdagen(j) {
+  const p = pasen(j);
+  const koning = new Date(j, 3, 27);
+  if (koning.getDay() === 0) koning.setDate(26); // valt 27 april op zondag, dan zaterdag 26
+  return [
+    [new Date(j, 0, 1), 'Nieuwjaarsdag'],
+    [addDays(p, -2), 'Goede Vrijdag'],
+    [koning, 'Koningsdag'],
+    [new Date(j, 4, 5), 'Bevrijdingsdag'],
+    [addDays(p, 39), 'Hemelvaartsdag'],
+    [new Date(j, 11, 25), 'Eerste Kerstdag'],
+    [new Date(j, 11, 26), 'Tweede Kerstdag'],
+  ].filter(([d]) => isOpen(d)).map(([d, naam]) => ({ datum: key(d), naam }));
+}
 const actieveMeds = () => S.meds.filter((m) => m.actief);
 const medById = (id) => S.meds.find((m) => m.id === id);
 const behNamen = (a) => (a.afspraak_behandelingen || []).map((x) => x.behandeling?.naam).filter(Boolean).join(' + ');
@@ -90,14 +120,16 @@ const behNamen = (a) => (a.afspraak_behandelingen || []).map((x) => x.behandelin
 // Gegevens ophalen
 // ===================================================================
 async function loadBase() {
-  const [m, b] = await Promise.all([
+  const [m, b, z] = await Promise.all([
     sb.from('medewerkers').select('*').order('id'),
     sb.from('behandelingen').select('*').order('volgorde').order('id'),
+    sb.from('sluitingsdagen').select('*').order('van'),
   ]);
   if (m.error) throw m.error;
   if (b.error) throw b.error;
   S.meds = m.data;
   S.beh = b.data;
+  S.sluit = z.error ? [] : z.data; // tabel ontbreekt nog? dan gewoon zonder
 }
 
 async function fetchRange(from, to) {
@@ -150,7 +182,7 @@ async function loadAfwLijst() {
 
 async function refresh() {
   try {
-    if (S.view === 'dag' || S.view === 'week') await loadRange();
+    if (S.view === 'dag' || S.view === 'week') await Promise.all([loadRange(), loadBase()]);
     else if (S.view === 'klanten') await loadKlanten();
     else if (S.view === 'instellingen') await Promise.all([loadBase(), loadAfwLijst()]);
     render();
@@ -274,6 +306,9 @@ function afwBlok(a, date, slotPx, cls) {
 
 function dagHtml() {
   if (!isOpen(S.date)) return `<div class="closed">Op ${DAGEN[S.date.getDay()]} is de salon gesloten.</div>`;
+  const dicht = geslotenOp(S.date);
+  if (dicht && !S.appts.length) return `<div class="closed"><b style="color:var(--text);font-size:18px">Gesloten</b><br>${esc(dicht.omschrijving || 'Sluitingsdag')}</div>`;
+  const banner = dicht ? `<div class="banner">Gesloten (${esc(dicht.omschrijving || 'sluitingsdag')}), maar er staan nog afspraken. Verplaats of annuleer ze.</div>` : '';
   const meds = actieveMeds();
   const slotPx = cssVarPx('--slot');
   const cols = `40px repeat(${meds.length}, minmax(0, 1fr))`;
@@ -301,7 +336,7 @@ function dagHtml() {
     return `<div class="col" data-action="slot" data-med="${m.id}">${afw}${appts}${nuLijn}</div>`;
   }).join('');
 
-  return `<div class="dayhead" style="grid-template-columns:${cols}"><span></span>
+  return `${banner}<div class="dayhead" style="grid-template-columns:${cols}"><span></span>
       ${meds.map((m) => `<div class="staffname"><span class="dot" style="background:${m.kleur}"></span>${esc(m.naam)}</div>`).join('')}
     </div>
     <div class="scroll" id="scroll" data-view="dag${key(S.date)}">
@@ -317,6 +352,8 @@ function weekHtml() {
   const kop = dagen.map((d) => `<button class="wday ${sameDay(d, today()) ? 'today' : ''}" data-action="goday" data-date="${key(d)}">
       <span class="dw">${DAGK[d.getDay()]}</span><span class="dt">${d.getDate()}</span></button>`).join('');
   const kolommen = dagen.map((d) => {
+    const dicht = geslotenOp(d);
+    if (dicht) return `<div class="wcol wdicht"><span>Gesloten<br>${esc(dicht.omschrijving || '')}</span></div>`;
     const ds = atMin(d, C.DAG_START);
     const subs = meds.map((m) => {
       const appts = S.appts.filter((a) => a.medewerker_id === m.id && sameDay(new Date(a.start_tijd), d)).map((a) => {
@@ -363,7 +400,23 @@ function instellingenHtml() {
     return `<div class="row" style="cursor:default"><span>${esc(medById(a.medewerker_id)?.naam || '?')}${a.reden ? ' · ' + esc(a.reden) : ''}<br><span class="sub">${periode}</span></span>
       <button class="textbtn danger" style="color:var(--danger)" data-action="delafw" data-id="${a.id}">Verwijderen</button></div>`;
   }).join('') : '<div class="empty">Geen geplande afwezigheid.</div>';
+  const vandaagK = key(today());
+  const jaar = today().getFullYear();
+  const sluit = S.sluit.filter((z) => z.tot >= vandaagK);
+  const fmtK = (k) => fmtDate(fromKey(k)) + ' ' + k.slice(0, 4);
+  const sluitRijen = sluit.length ? sluit.map((z) => `<div class="row ${z.gesloten ? '' : 'off'}" style="cursor:default">
+      <span>${esc(z.omschrijving || 'Sluitingsdag')}<br><span class="sub">${z.van === z.tot ? fmtK(z.van) : fmtK(z.van) + ' t/m ' + fmtK(z.tot)} · ${z.gesloten ? 'gesloten' : 'toch open'}</span></span>
+      <span class="acts">
+        <button class="textbtn" data-action="sluittoggle" data-id="${z.id}">${z.gesloten ? 'Toch open' : 'Dicht'}</button>
+        <button class="textbtn" style="color:var(--danger)" data-action="sluitdel" data-id="${z.id}" aria-label="Verwijderen">✕</button>
+      </span></div>`).join('') : '<div class="empty">Geen sluitingsdagen gepland.</div>';
   return `<div class="page">
+    <section><h2>SLUITINGSDAGEN / FEESTDAGEN</h2><div class="list">${sluitRijen}</div>
+      <div class="two" style="margin-top:10px">
+        <button class="secondary" data-action="feestdagen" data-jaar="${jaar}">Feestdagen ${jaar}</button>
+        <button class="secondary" data-action="feestdagen" data-jaar="${jaar + 1}">Feestdagen ${jaar + 1}</button>
+      </div>
+      <button class="secondary" style="margin-top:10px" data-action="nieuwesluit">+ Sluitingsdag / salonvakantie</button></section>
     <section><h2>BEHANDELINGEN</h2><div class="list">${beh}</div>
       <button class="secondary" style="margin-top:10px" data-action="nieuwebeh">+ Behandeling</button></section>
     <section><h2>AFWEZIGHEID / VAKANTIE</h2><div class="list">${afw}</div>
@@ -386,6 +439,7 @@ function renderSheet() {
   else if (F.type === 'klant') ({ titel, body, footer } = klantSheet(F));
   else if (F.type === 'beh') ({ titel, body, footer } = behSheet(F));
   else if (F.type === 'afw') ({ titel, body, footer } = afwSheet(F));
+  else if (F.type === 'sluit') ({ titel, body, footer } = sluitSheet(F));
   sheetEl.innerHTML = `<div class="overlay" data-action="sluitbuiten"><div class="panel" role="dialog" aria-modal="true" aria-label="${esc(titel)}">
     <header><h1>${esc(titel)}</h1><button class="iconbtn plain" data-action="sluit" aria-label="Sluiten">${ICON.close}</button></header>
     <div class="body">${body}</div>
@@ -451,7 +505,7 @@ function duurVan(F) {
 function vrijeTijden(F) {
   const d = fromKey(F.date);
   const n = duurVan(F) / C.BLOK;
-  if (!F.dag || !n || !F.med || !isOpen(d)) return [];
+  if (!F.dag || !n || !F.med || !isOpen(d) || geslotenOp(d)) return [];
   const appts = F.editId ? F.dag.appts.filter((a) => a.id !== F.editId) : F.dag.appts; // eigen afspraak telt niet als bezet
   return vrijeStarts(bezet(F.med, d, appts, F.dag.afw), n, d);
 }
@@ -486,6 +540,7 @@ function nieuwSheet(F) {
 
   let tijden;
   if (!isOpen(d)) tijden = `<div class="hint">Op ${DAGEN[d.getDay()]} is de salon gesloten.</div>`;
+  else if (geslotenOp(d)) tijden = `<div class="hint">Gesloten: ${esc(geslotenOp(d).omschrijving || 'sluitingsdag')}.</div>`;
   else if (!duur) tijden = '<div class="hint">Kies eerst een of meer behandelingen.</div>';
   else if (!F.dag) tijden = '<div class="hint">Vrije tijden laden…</div>';
   else if (!vrij.length) tijden = '<div class="hint">Geen ruimte meer op deze dag.</div>';
@@ -704,6 +759,40 @@ async function bewaarAfw() {
   await refresh();
 }
 
+// ---------- Sluitingsdag ----------
+function sluitSheet(F) {
+  const z = F.z;
+  const body = `
+    <div class="field"><label for="zo">Omschrijving</label><input class="input" id="zo" data-bind="z.omschrijving" placeholder="Bijv. salonvakantie" value="${esc(z.omschrijving)}"></div>
+    <div class="two">
+      <div class="field"><label for="zv">Van</label><input class="input" type="date" id="zv" data-bind="z.van" value="${z.van}"></div>
+      <div class="field"><label for="zt">Tot en met</label><input class="input" type="date" id="zt" data-bind="z.tot" value="${z.tot}"></div>
+    </div>
+    <div class="hint">Op deze dagen kunnen geen afspraken worden gemaakt. Bestaande afspraken blijven staan; de app waarschuwt ervoor.</div>`;
+  return { titel: 'Sluitingsdag', body, footer: `<button class="primary" data-action="bewaarsluit">Opslaan</button>` };
+}
+
+async function bewaarSluit() {
+  const z = S.sheet.z;
+  if (!z.van || !z.tot) { toast('Vul de datums in'); return; }
+  if (z.tot < z.van) { toast('"Tot en met" moet na "Van" liggen'); return; }
+  const { error } = await sb.from('sluitingsdagen').insert({ van: z.van, tot: z.tot, omschrijving: z.omschrijving.trim() || null });
+  if (error) { toast(foutmelding(error)); return; }
+  closeSheet();
+  toast('Sluitingsdag opgeslagen');
+  await refresh();
+}
+
+async function voegFeestdagenToe(jaar) {
+  const bestaand = new Set(S.sluit.map((z) => z.van));
+  const nieuw = feestdagen(jaar).filter((f) => !bestaand.has(f.datum) && f.datum >= key(today()));
+  if (!nieuw.length) { toast(`Feestdagen ${jaar} staan er al in`); return; }
+  const { error } = await sb.from('sluitingsdagen').insert(nieuw.map((f) => ({ van: f.datum, tot: f.datum, omschrijving: f.naam })));
+  if (error) { toast(foutmelding(error)); return; }
+  toast(`${nieuw.length} feestdagen toegevoegd. Zet zelf op "Toch open" waar de salon open is.`);
+  await refresh();
+}
+
 // ===================================================================
 // Acties
 // ===================================================================
@@ -798,6 +887,26 @@ const acties = {
     renderSheet();
   },
   afwmed(el) { S.sheet.a.med = Number(el.dataset.id); renderSheet(); },
+  feestdagen(el) { voegFeestdagenToe(Number(el.dataset.jaar)); },
+  nieuwesluit() {
+    const d = key(nextOpen(today()));
+    S.sheet = { type: 'sluit', z: { omschrijving: '', van: d, tot: d } };
+    renderSheet();
+  },
+  bewaarsluit() { bewaarSluit(); },
+  async sluittoggle(el) {
+    const z = S.sluit.find((x) => x.id === Number(el.dataset.id));
+    if (!z) return;
+    const { error } = await sb.from('sluitingsdagen').update({ gesloten: !z.gesloten }).eq('id', z.id);
+    if (error) { toast(foutmelding(error)); return; }
+    await refresh();
+  },
+  async sluitdel(el) {
+    if (!confirm('Deze sluitingsdag verwijderen?')) return;
+    const { error } = await sb.from('sluitingsdagen').delete().eq('id', Number(el.dataset.id));
+    if (error) { toast(foutmelding(error)); return; }
+    await refresh();
+  },
   bewaarafw() { bewaarAfw(); },
   async delafw(el) {
     if (!confirm('Deze afwezigheid verwijderen?')) return;
@@ -899,6 +1008,7 @@ async function start() {
     kanaal = sb.channel('salon')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'afspraken' }, () => refresh())
       .on('postgres_changes', { event: '*', schema: 'public', table: 'afwezigheid' }, () => refresh())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'sluitingsdagen' }, () => refresh())
       .subscribe();
   }
 }

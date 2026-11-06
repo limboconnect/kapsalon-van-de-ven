@@ -35,7 +35,7 @@ fi
 
 # --- 2. Alle tabellen ophalen (per 1000 rijen) ------------------------
 FOUTEN=0
-for TABEL in medewerkers behandelingen klanten afspraken afspraak_behandelingen afwezigheid; do
+for TABEL in medewerkers behandelingen klanten afspraken afspraak_behandelingen afwezigheid sluitingsdagen; do
   OFFSET=0
   DEEL=0
   TOTAAL=0
