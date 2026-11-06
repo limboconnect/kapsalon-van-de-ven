@@ -633,6 +633,7 @@ async function zoekKlantenSheet() {
 async function opslaanAfspraak() {
   const F = S.sheet;
   F.bezig = true; renderSheet();
+  eigenWijziging = Date.now(); // vóór het opslaan: de melding van de database kan eerder binnenkomen dan het antwoord
   try {
     if (!F.klant && F.nieuweKlant) {
       const { data, error } = await sb.from('klanten').insert({ naam: F.kNaam.trim(), telefoon: F.kTel.trim() || null }).select().single();
