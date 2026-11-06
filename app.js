@@ -239,7 +239,7 @@ async function refresh(opts = {}) {
   try {
     if (S.view === 'dag' || S.view === 'week') {
       await Promise.all([loadRange(), opts.basis ? loadBase() : null]);
-      if (vingerafdruk() !== laatstGetekend) render();
+      if (vingerafdruk() !== laatstGetekend) tekenAgenda();
       haalBurenOp();
       return;
     }
@@ -280,6 +280,16 @@ function vrijeStarts(busy, n, date) {
 const app = document.getElementById('app');
 const sheetEl = document.getElementById('sheet');
 
+function zetScroll(bewaar) {
+  const sc = document.getElementById('scroll');
+  if (!sc) return;
+  if (bewaar !== null) sc.scrollTop = bewaar;
+  else if (S.view === 'dag' && sameDay(S.date, today())) {
+    const m = minOfDay(new Date()) - C.DAG_START - 60;
+    sc.scrollTop = Math.max(0, (m / C.BLOK) * cssVarPx('--slot'));
+  }
+}
+
 function render() {
   if (!S.session) { app.innerHTML = loginHtml(); return; }
   const oud = document.getElementById('scroll');
@@ -287,14 +297,21 @@ function render() {
   app.innerHTML = shellHtml();
   S.anim = null;
   laatstGetekend = (S.view === 'dag' || S.view === 'week') ? vingerafdruk() : '';
-  const sc = document.getElementById('scroll');
-  if (sc) {
-    if (bewaar !== null) sc.scrollTop = bewaar;
-    else if (S.view === 'dag' && sameDay(S.date, today())) {
-      const m = minOfDay(new Date()) - C.DAG_START - 60;
-      sc.scrollTop = Math.max(0, (m / C.BLOK) * cssVarPx('--slot'));
-    }
-  }
+  zetScroll(bewaar);
+}
+
+// Alleen kop en inhoud van de agenda vervangen (het <main>-element blijft staan).
+// behoudScroll: verticale positie meenemen naar een andere dag (bij vegen).
+function tekenAgenda(behoudScroll = false) {
+  const shell = app.querySelector('.shell');
+  const kop = document.getElementById('kop'), hoofd = document.getElementById('hoofd');
+  if (!shell || !kop || !hoofd || shell.dataset.view !== S.view) { render(); return; }
+  const oud = document.getElementById('scroll');
+  const bewaar = oud && (behoudScroll || oud.dataset.view === S.view + key(S.date)) ? oud.scrollTop : null;
+  kop.innerHTML = kopHtml();
+  hoofd.innerHTML = inhoudHtml();
+  laatstGetekend = vingerafdruk();
+  zetScroll(bewaar);
 }
 
 function loginHtml(fout = '') {
@@ -308,7 +325,7 @@ function loginHtml(fout = '') {
   </form></div>`;
 }
 
-function shellHtml() {
+function kopHtml() {
   const agenda = S.view === 'dag' || S.view === 'week';
   let kicker = '', titel = '';
   if (S.view === 'dag') {
@@ -320,16 +337,7 @@ function shellHtml() {
     titel = `Week ${isoWeek(S.date)}`;
   } else if (S.view === 'klanten') titel = 'Klanten';
   else titel = 'Instellingen';
-
-  let inhoud = '';
-  if (S.view === 'dag') inhoud = dagHtml();
-  else if (S.view === 'week') inhoud = weekHtml();
-  else if (S.view === 'klanten') inhoud = klantenHtml();
-  else inhoud = instellingenHtml();
-
-  return `<div class="shell">
-    <header class="top">
-      <div class="brandrow"><span class="brand">KAPSALON VAN DE VEN</span>
+  return `<div class="brandrow"><span class="brand">KAPSALON VAN DE VEN</span>
         ${agenda ? `<button class="textbtn" data-action="vandaag">Vandaag</button>` : ''}</div>
       <div class="titlerow">
         ${agenda
@@ -341,9 +349,21 @@ function shellHtml() {
       </div>
       ${agenda ? `<div class="seg">
         <button class="${S.view === 'dag' ? 'on' : ''}" data-action="view" data-v="dag">Dag</button>
-        <button class="${S.view === 'week' ? 'on' : ''}" data-action="view" data-v="week">Week</button></div>` : ''}
-    </header>
-    <main class="${S.anim ? 'veeg-' + S.anim : ''}">${inhoud}</main>
+        <button class="${S.view === 'week' ? 'on' : ''}" data-action="view" data-v="week">Week</button></div>` : ''}`;
+}
+
+function inhoudHtml() {
+  if (S.view === 'dag') return dagHtml();
+  if (S.view === 'week') return weekHtml();
+  if (S.view === 'klanten') return klantenHtml();
+  return instellingenHtml();
+}
+
+function shellHtml() {
+  const agenda = S.view === 'dag' || S.view === 'week';
+  return `<div class="shell" data-view="${S.view}">
+    <header class="top" id="kop">${kopHtml()}</header>
+    <main id="hoofd" class="${S.anim ? 'veeg-' + S.anim : ''}">${inhoudHtml()}</main>
     ${agenda ? `<button class="fab" data-action="nieuw">${ICON.plus}Afspraak</button>` : ''}
     <nav class="bottomnav">
       <button class="${agenda ? 'on' : ''}" data-action="view" data-v="dag">${ICON.cal}Agenda</button>
@@ -845,7 +865,7 @@ async function naarDatum(anim = null) {
   const c = (S.view === 'dag' || S.view === 'week') ? cache.get(bereikSleutel(S.view, S.date)) : null;
   S.appts = c ? c.appts : []; S.afw = c ? c.afw : [];
   S.anim = anim;
-  render();
+  if (anim) render(); else tekenAgenda();
   await refresh();
 }
 
@@ -857,15 +877,43 @@ async function verschuif(dir, anim = null) {
 
 // Vegen naar links/rechts in de agenda; het scherm volgt de vinger
 let veeg = null;
+let veegFrame = 0;
 function veegTerug(main) {
   if (!main) return;
-  main.style.transition = 'transform .2s ease-out, opacity .2s';
+  cancelAnimationFrame(veegFrame);
+  main.style.transition = 'transform .2s ease-out';
   main.style.transform = '';
-  main.style.opacity = '';
+}
+
+// Oude dag eruit schuiven, nieuwe van de andere kant erin (zelfde <main>-element)
+let bezigMetSchuiven = false;
+function schuifNaar(dir, main) {
+  bezigMetSchuiven = true;
+  cancelAnimationFrame(veegFrame);
+  const breedte = main.offsetWidth || window.innerWidth;
+  main.style.transition = 'transform .15s ease-in';
+  main.style.transform = `translateX(${-dir * breedte}px)`;
+  let klaar = false;
+  const verder = () => {
+    if (klaar) return;
+    klaar = true;
+    S.date = buurDatum(S.view, S.date, dir);
+    const c = cache.get(bereikSleutel(S.view, S.date));
+    S.appts = c ? c.appts : []; S.afw = c ? c.afw : [];
+    main.style.transition = 'none';
+    main.style.transform = `translateX(${dir * breedte}px)`;
+    tekenAgenda(true);
+    void main.offsetWidth; // startpositie vastleggen vóór de animatie
+    main.style.transition = 'transform .2s ease-out';
+    main.style.transform = '';
+    setTimeout(() => { bezigMetSchuiven = false; refresh(); }, 210);
+  };
+  main.addEventListener('transitionend', verder, { once: true });
+  setTimeout(verder, 200); // voor het geval transitionend uitblijft
 }
 document.addEventListener('touchstart', (e) => {
   veeg = null;
-  if (S.sheet || !S.session || !(S.view === 'dag' || S.view === 'week')) return;
+  if (bezigMetSchuiven || S.sheet || !S.session || !(S.view === 'dag' || S.view === 'week')) return;
   const main = e.target.closest('main');
   if (!main || e.touches.length !== 1) return;
   const t = e.touches[0];
@@ -880,9 +928,13 @@ document.addEventListener('touchmove', (e) => {
     veeg.richting = Math.abs(dx) > 1.3 * Math.abs(dy) ? 'h' : 'v';
   }
   if (veeg.richting !== 'h') return;
-  veeg.main.style.transition = 'none';
-  veeg.main.style.transform = `translateX(${dx}px)`;
-  veeg.main.style.opacity = String(1 - Math.min(Math.abs(dx) / 700, 0.35));
+  // maximaal één keer per beeldje bijwerken
+  const main = veeg.main;
+  cancelAnimationFrame(veegFrame);
+  veegFrame = requestAnimationFrame(() => {
+    main.style.transition = 'none';
+    main.style.transform = `translateX(${dx}px)`;
+  });
 }, { passive: true });
 document.addEventListener('touchend', (e) => {
   if (!veeg) return;
@@ -890,11 +942,7 @@ document.addEventListener('touchend', (e) => {
   if (v.richting !== 'h') return;
   const dx = e.changedTouches[0].clientX - v.x, dt = Date.now() - v.t;
   if (Math.abs(dx) > 70 || (Math.abs(dx) > 35 && dt < 250)) {
-    const dir = dx < 0 ? 1 : -1;
-    v.main.style.transition = 'transform .12s ease-in, opacity .12s';
-    v.main.style.transform = `translateX(${dx < 0 ? -45 : 45}%)`;
-    v.main.style.opacity = '0';
-    setTimeout(() => verschuif(dir, dir > 0 ? 'links' : 'rechts'), 110);
+    schuifNaar(dx < 0 ? 1 : -1, v.main);
   } else {
     veegTerug(v.main);
   }
@@ -1250,7 +1298,7 @@ sb.auth.onAuthStateChange((event, session) => {
 });
 
 // Elke minuut de "nu"-lijn bijwerken; bij terugkeren naar de app verversen
-setInterval(() => { if (S.session && S.view === 'dag' && !S.sheet) render(); }, 60000);
+setInterval(() => { if (S.session && S.view === 'dag' && !S.sheet && !bezigMetSchuiven) tekenAgenda(); }, 60000);
 document.addEventListener('visibilitychange', () => { if (!document.hidden && S.session) { cache.clear(); refresh({ basis: true }); } });
 
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
