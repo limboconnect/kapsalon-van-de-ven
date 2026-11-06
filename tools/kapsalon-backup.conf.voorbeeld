@@ -1,0 +1,15 @@
+# Kopieer dit bestand naar "kapsalon-backup.conf" en vul het in.
+# Zet de rechten zo dat alleen de eigenaar het kan lezen (chmod 600).
+# Dit bestand NOOIT in GitHub zetten.
+
+SUPABASE_URL="https://nucdjrjuqjpuexsjejeh.supabase.co"
+SUPABASE_KEY="sb_publishable_D1Qk7ASjYZnDoVXEKkxolQ_ZTsApH20"
+
+SALON_EMAIL="salon@..."
+SALON_WACHTWOORD="..."
+
+# Waar de back-ups komen (map moet bestaan of wordt aangemaakt)
+BACKUP_MAP="/volume1/backup/kapsalon"
+
+# Hoeveel dagen back-ups bewaren
+BEWAAR_DAGEN=60
