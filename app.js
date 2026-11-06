@@ -326,7 +326,10 @@ function dagHtml() {
       const st = `top:${top + 2}px;height:${n * slotPx - 4}px;background:${m.kleur}2E;border-color:${m.kleur}8C`;
       const naam = a.klant?.naam || '';
       const beh = behNamen(a);
-      if (n <= 1) return `<div class="appt kort" style="${st}" data-action="appt" data-id="${a.id}"><b class="k">${fmtTime(s)}</b> ${esc(naam || beh)}</div>`;
+      if (n <= 1) return `<div class="appt kort" style="${st}" data-action="appt" data-id="${a.id}"><b class="t1">${fmtTime(s)}</b><span class="k">${esc(naam || beh)}</span></div>`;
+      if (n === 2) return `<div class="appt mid" style="${st}" data-action="appt" data-id="${a.id}">
+        <span class="r1"><b class="t1">${fmtTime(s)}</b><span class="k">${esc(naam || '—')}</span></span>
+        <span class="b">${esc(beh)}</span></div>`;
       return `<div class="appt" style="${st}" data-action="appt" data-id="${a.id}">
         <span class="t">${fmtTime(s)} – ${fmtTime(e)}</span>
         <span class="k">${esc(naam || '—')}</span>
@@ -674,8 +677,8 @@ function klantSheet(F) {
   const k = F.k;
   let hist = '';
   if (k.id) {
-    hist = !F.historie ? '<div class="hint">Bezoeken laden…</div>'
-      : !F.historie.length ? '<div class="hint">Nog geen bezoeken.</div>'
+    hist = !F.historie ? '<div class="hint">Afspraken laden…</div>'
+      : !F.historie.length ? '<div class="hint">Nog geen afspraken.</div>'
       : `<div class="list">${F.historie.map((a) => {
           const s = new Date(a.start_tijd);
           return `<div class="row" style="cursor:default"><span>${fmtDate(s)} ${s.getFullYear()} · ${fmtTime(s)}<br><span class="sub">${esc(behNamen(a))} · ${esc(medById(a.medewerker_id)?.naam || '')}</span></span></div>`;
@@ -686,7 +689,7 @@ function klantSheet(F) {
     <div class="field"><label for="kt">Telefoon</label><input class="input" id="kt" data-bind="k.telefoon" inputmode="tel" value="${esc(k.telefoon || '')}"></div>
     <div class="field"><label for="ke">E-mail</label><input class="input" id="ke" data-bind="k.email" type="email" value="${esc(k.email || '')}"></div>
     <div class="field"><label for="kno">Notities</label><textarea class="input" id="kno" data-bind="k.notities">${esc(k.notities || '')}</textarea></div>
-    ${k.id ? `<div class="field"><span class="lbl">Bezoeken</span>${hist}</div>` : ''}`;
+    ${k.id ? `<div class="field"><span class="lbl">Afspraken (nieuwste eerst)</span>${hist}</div>` : ''}`;
   return { titel: k.id ? 'Klant' : 'Nieuwe klant', body, footer: `<button class="primary" data-action="bewaarklant">Opslaan</button>` };
 }
 
