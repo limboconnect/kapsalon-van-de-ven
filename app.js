@@ -869,7 +869,15 @@ document.addEventListener('submit', async (ev) => {
   const btn = f.querySelector('button');
   btn.disabled = true; btn.textContent = 'Bezig…';
   const { error } = await sb.auth.signInWithPassword({ email: f.email.value.trim(), password: f.password.value });
-  if (error) { app.innerHTML = loginHtml('Inloggen mislukt: controleer e-mail en wachtwoord.'); return; }
+  if (error) {
+    const m = (error.message || '').toLowerCase();
+    let tekst = 'Inloggen mislukt: ' + error.message;
+    if (m.includes('invalid login')) tekst = 'E-mailadres of wachtwoord klopt niet.';
+    else if (m.includes('not confirmed')) tekst = 'Dit account is nog niet bevestigd in Supabase.';
+    else if (m.includes('banned')) tekst = 'Dit account is geblokkeerd.';
+    app.innerHTML = loginHtml(tekst);
+    return;
+  }
 });
 
 document.addEventListener('keydown', (ev) => {
