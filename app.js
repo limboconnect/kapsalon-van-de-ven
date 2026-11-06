@@ -203,16 +203,31 @@ async function loadRange() {
   if (S.view === view && key(S.date) === key(date)) { S.appts = r.appts; S.afw = r.afw; } // intussen niet verder geveegd
 }
 
-// Vorige en volgende dag/week alvast ophalen
-async function haalBurenOp() {
+// Eén dag/week ophalen en bewaren (dubbele verzoeken voor dezelfde dag worden gedeeld)
+const bezigMet = new Map();
+function haalOp(view, date) {
+  const k = bereikSleutel(view, date);
+  if (cache.has(k)) return Promise.resolve(cache.get(k));
+  if (bezigMet.has(k)) return bezigMet.get(k);
+  const { from, to } = bereikVoor(view, date);
+  const p = fetchRange(from, to)
+    .then((r) => {
+      cache.set(k, r);
+      if (cache.size > 40) cache.delete(cache.keys().next().value); // oudste weg
+      return r;
+    })
+    .finally(() => bezigMet.delete(k));
+  bezigMet.set(k, p);
+  return p;
+}
+
+// Buren alvast ophalen: beide kanten tegelijk, in de veegrichting twee stappen vooruit
+let laatsteRichting = 1;
+function haalBurenOp() {
   if (!(S.view === 'dag' || S.view === 'week')) return;
-  for (const dir of [1, -1]) {
-    const d = buurDatum(S.view, S.date, dir);
-    const k = bereikSleutel(S.view, d);
-    if (cache.has(k)) continue;
-    const { from, to } = bereikVoor(S.view, d);
-    try { cache.set(k, await fetchRange(from, to)); } catch { /* volgende keer */ }
-  }
+  const view = S.view, d1 = buurDatum(view, S.date, laatsteRichting);
+  const lijst = [d1, buurDatum(view, S.date, -laatsteRichting), buurDatum(view, d1, laatsteRichting)];
+  lijst.forEach((d) => haalOp(view, d).catch(() => { /* volgende keer */ }));
 }
 
 // Alleen opnieuw tekenen als er echt iets veranderd is
@@ -871,6 +886,7 @@ async function naarDatum(anim = null) {
 
 // Eén dag (of week) vooruit/achteruit; anim = veeg-animatie
 async function verschuif(dir, anim = null) {
+  laatsteRichting = dir;
   S.date = buurDatum(S.view, S.date, dir);
   await naarDatum(anim);
 }
@@ -889,15 +905,21 @@ function veegTerug(main) {
 let bezigMetSchuiven = false;
 function schuifNaar(dir, main) {
   bezigMetSchuiven = true;
+  laatsteRichting = dir;
   cancelAnimationFrame(veegFrame);
+  const doel = buurDatum(S.view, S.date, dir);
+  // nog niet in de cache? alvast ophalen terwijl het oude scherm wegschuift
+  const data = haalOp(S.view, doel).catch(() => null);
   const breedte = main.offsetWidth || window.innerWidth;
   main.style.transition = 'transform .15s ease-in';
   main.style.transform = `translateX(${-dir * breedte}px)`;
   let klaar = false;
-  const verder = () => {
+  const verder = async () => {
     if (klaar) return;
     klaar = true;
-    S.date = buurDatum(S.view, S.date, dir);
+    // even wachten op de gegevens (max. 0,6 s) zodat er geen lege agenda verschijnt
+    if (!cache.has(bereikSleutel(S.view, doel))) await Promise.race([data, new Promise((r) => setTimeout(r, 600))]);
+    S.date = doel;
     const c = cache.get(bereikSleutel(S.view, S.date));
     S.appts = c ? c.appts : []; S.afw = c ? c.afw : [];
     main.style.transition = 'none';

@@ -194,4 +194,6 @@ main.veeg-rechts { animation: veegR .22s ease-out; }
 
 /* Vegen: browser regelt alleen verticaal scrollen, horizontaal doet de app */
 main, main .scroll { touch-action: pan-y; }
+/* Geen "terug"-veeggebaar of uitrekken van de browser tijdens vegen */
+html, body { overscroll-behavior: none; }
 main { will-change: transform; }
