@@ -53,6 +53,35 @@ const ICON = {
   check: '<svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5 9-10"/></svg>',
 };
 
+// ---------- Geluiden (per apparaat aan/uit, standaard uit) ----------
+let audio = null;
+let eigenWijziging = 0; // tijdstip van eigen opslaan, om geen belletje voor jezelf te geven
+const geluidAan = () => { try { return localStorage.getItem('geluid') === '1'; } catch { return false; } };
+function audioCtx() {
+  if (!audio) { const AC = window.AudioContext || window.webkitAudioContext; if (!AC) return null; audio = new AC(); }
+  if (audio.state === 'suspended') audio.resume();
+  return audio;
+}
+function toon(freq, start, duur, type = 'sine', volume = 0.15) {
+  const ctx = audioCtx(); if (!ctx) return;
+  const t = ctx.currentTime + start;
+  const osc = ctx.createOscillator(), g = ctx.createGain();
+  osc.type = type; osc.frequency.value = freq;
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(volume, t + 0.01);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + duur);
+  osc.connect(g).connect(ctx.destination);
+  osc.start(t); osc.stop(t + duur + 0.02);
+}
+function speel(soort, ookAlsUit = false) {
+  if (!ookAlsUit && !geluidAan()) return;
+  if (soort === 'ok') { toon(880, 0, 0.09); toon(1320, 0.08, 0.12); }
+  else if (soort === 'fout') { toon(330, 0, 0.14, 'triangle', 0.2); toon(262, 0.15, 0.2, 'triangle', 0.2); }
+  else if (soort === 'nieuw') { toon(1046, 0, 0.6, 'sine', 0.12); toon(1568, 0.12, 0.7, 'sine', 0.09); }
+}
+// Browsers starten geluid pas na een tik van de gebruiker
+document.addEventListener('pointerdown', () => { if (geluidAan()) audioCtx(); }, { passive: true });
+
 let toastTimer;
 function toast(msg) {
   const t = document.getElementById('toast');
@@ -431,6 +460,12 @@ function instellingenHtml() {
       <button class="secondary" style="margin-top:10px" data-action="nieuwebeh">+ Behandeling</button></section>
     <section><h2>AFWEZIGHEID / VAKANTIE</h2><div class="list">${afw}</div>
       <button class="secondary" style="margin-top:10px" data-action="nieuweafw">+ Afwezigheid</button></section>
+    <section><h2>DIT APPARAAT</h2>
+      <div class="list"><div class="row" style="cursor:default">
+        <label class="check" style="flex:1"><input type="checkbox" data-pref="geluid" ${geluidAan() ? 'checked' : ''}> Geluiden
+          <span class="sub" style="margin-left:auto">opslaan, fout, nieuwe afspraak van collega</span></label>
+      </div></div>
+      <button class="secondary" style="margin-top:10px" data-action="testgeluid">Geluiden testen</button></section>
     <section><h2>ACCOUNT</h2><button class="secondary danger" data-action="logout">Uitloggen</button></section>
     <p class="copy">${COPYRIGHT}</p>
   </div>`;
@@ -629,6 +664,8 @@ async function opslaanAfspraak() {
     const { error: e2 } = await sb.from('afspraak_behandelingen').insert(F.beh.map((id) => ({ afspraak_id: afspraakId, behandeling_id: id })));
     if (e2) throw e2;
     localStorage.setItem('ingepland_door', String(F.door));
+    eigenWijziging = Date.now();
+    speel('ok');
     const wasEdit = !!F.editId;
     closeSheet();
     if (S.view !== 'week') S.view = 'dag';
@@ -637,6 +674,7 @@ async function opslaanAfspraak() {
     toast(`${wasEdit ? 'Afspraak verplaatst naar' : 'Afspraak opgeslagen:'} ${fmtDate(d)} ${fmtTime(start)}`);
   } catch (e) {
     F.bezig = false;
+    speel('fout');
     toast(foutmelding(e));
     if (e.code === '23P01') { F.slot = null; await laadVrij(); } else renderSheet();
   }
@@ -940,8 +978,10 @@ const acties = {
   async annuleer() {
     const a = S.sheet.a;
     if (!confirm(`Afspraak van ${a.klant?.naam || 'deze klant'} annuleren?`)) return;
+    eigenWijziging = Date.now();
     const { error } = await sb.from('afspraken').update({ geannuleerd: true }).eq('id', a.id);
-    if (error) { toast(foutmelding(error)); return; }
+    if (error) { speel('fout'); toast(foutmelding(error)); return; }
+    speel('ok');
     closeSheet();
     toast('Afspraak geannuleerd');
     await refresh();
@@ -1024,6 +1064,12 @@ const acties = {
     if (error) { toast(foutmelding(error)); return; }
     await refresh();
   },
+  testgeluid() {
+    speel('ok', true);
+    setTimeout(() => speel('fout', true), 600);
+    setTimeout(() => speel('nieuw', true), 1300);
+    if (!geluidAan()) toast('Geluiden staan nog uit op dit apparaat');
+  },
   async logout() {
     if (!confirm('Uitloggen op dit apparaat?')) return;
     await sb.auth.signOut();
@@ -1075,6 +1121,11 @@ document.addEventListener('input', (ev) => {
 
 document.addEventListener('change', (ev) => {
   const el = ev.target;
+  if (el.dataset.pref === 'geluid') {
+    try { localStorage.setItem('geluid', el.checked ? '1' : '0'); } catch { /* geen opslag */ }
+    if (el.checked) speel('ok');
+    return;
+  }
   if (!el.dataset.bind || !S.sheet) return;
   let val = el.type === 'checkbox' ? el.checked : el.value;
   if (el.dataset.num) val = Number(val);
@@ -1116,7 +1167,11 @@ async function start() {
   render();
   if (!kanaal) {
     kanaal = sb.channel('salon')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'afspraken' }, () => refresh())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'afspraken' }, (p) => {
+        // belletje bij een nieuwe afspraak die een collega (ander apparaat) maakte
+        if (p?.eventType === 'INSERT' && Date.now() - eigenWijziging > 5000) speel('nieuw');
+        refresh();
+      })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'afwezigheid' }, () => refresh())
       .on('postgres_changes', { event: '*', schema: 'public', table: 'sluitingsdagen' }, () => refresh())
       .subscribe();
