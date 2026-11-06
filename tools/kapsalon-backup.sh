@@ -10,8 +10,9 @@
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 CONF="$SCRIPT_DIR/kapsalon-backup.conf"
 [ -f "$CONF" ] || { echo "Config niet gevonden: $CONF"; exit 1; }
+# Windows-regeleindes (\r) wegfilteren, voor als de conf in Kladblok is bewerkt
 # shellcheck source=/dev/null
-. "$CONF"
+. <(tr -d '\r' < "$CONF")
 
 : "${SUPABASE_URL:?}" "${SUPABASE_KEY:?}" "${SALON_EMAIL:?}" "${SALON_WACHTWOORD:?}" "${BACKUP_MAP:?}"
 BEWAAR_DAGEN="${BEWAAR_DAGEN:-60}"
@@ -26,7 +27,7 @@ log() { echo "$(date '+%Y-%m-%d %H:%M:%S') $*" | tee -a "$LOG"; }
 ANTWOORD="$(curl -sS -X POST "$SUPABASE_URL/auth/v1/token?grant_type=password" \
   -H "apikey: $SUPABASE_KEY" -H "Content-Type: application/json" \
   -d "{\"email\":\"$SALON_EMAIL\",\"password\":\"$SALON_WACHTWOORD\"}")"
-TOKEN="$(echo "$ANTWOORD" | sed -n 's/.*"access_token":"\([^"]*\)".*/\1/p')"
+TOKEN="$(echo "$ANTWOORD" | sed -n 's/.*"access_token"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
 if [ -z "$TOKEN" ]; then
   log "FOUT: inloggen mislukt: $(echo "$ANTWOORD" | head -c 300)"
   exit 1
@@ -49,8 +50,8 @@ for TABEL in medewerkers behandelingen klanten afspraken afspraak_behandelingen 
       break
     fi
     # Aantal rijen tellen (aantal objecten op het hoogste niveau)
-    AANTAL="$(grep -o '},{' "$BESTAND" | wc -l)"
-    if [ "$(head -c 2 "$BESTAND")" = "[]" ]; then
+    AANTAL="$(grep -o '}, *{' "$BESTAND" | wc -l)"
+    if [ "$(tr -d ' \n\r' < "$BESTAND" | head -c 2)" = "[]" ]; then
       rm -f "$BESTAND"
       break
     fi
