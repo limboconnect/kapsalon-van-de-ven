@@ -29,6 +29,7 @@ function isoWeek(d) {
 const DAGEN = ['zondag', 'maandag', 'dinsdag', 'woensdag', 'donderdag', 'vrijdag', 'zaterdag'];
 const DAGK = ['ZO', 'MA', 'DI', 'WO', 'DO', 'VR', 'ZA'];
 const MAAND = ['jan', 'feb', 'mrt', 'apr', 'mei', 'jun', 'jul', 'aug', 'sep', 'okt', 'nov', 'dec'];
+const MAANDLANG = ['januari', 'februari', 'maart', 'april', 'mei', 'juni', 'juli', 'augustus', 'september', 'oktober', 'november', 'december'];
 const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 const fmtDate = (d) => `${DAGK[d.getDay()].toLowerCase()} ${d.getDate()} ${MAAND[d.getMonth()]}`;
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -42,6 +43,7 @@ const tijdOpties = (sel, vanaf = C.DAG_START, tot = C.DAG_EIND) => {
 const ICON = {
   left: '<svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>',
   right: '<svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg>',
+  down: '<svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-left:6px;opacity:.7"><path d="M6 9l6 6 6-6"/></svg>',
   plus: '<svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>',
   close: '<svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>',
   cal: '<svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></svg>',
@@ -225,6 +227,7 @@ function render() {
   const oud = document.getElementById('scroll');
   const bewaar = oud && oud.dataset.view === S.view + key(S.date) ? oud.scrollTop : null;
   app.innerHTML = shellHtml();
+  S.anim = null;
   const sc = document.getElementById('scroll');
   if (sc) {
     if (bewaar !== null) sc.scrollTop = bewaar;
@@ -269,7 +272,9 @@ function shellHtml() {
       <div class="brandrow"><span class="brand">KAPSALON VAN DE VEN</span>
         ${agenda ? `<button class="textbtn" data-action="vandaag">Vandaag</button>` : ''}</div>
       <div class="titlerow">
-        <div><div class="kicker">${esc(kicker)}</div><h1>${esc(titel)}</h1></div>
+        ${agenda
+          ? `<button class="titelknop" data-action="kalender" aria-label="Kies een datum in de kalender"><span class="kicker">${esc(kicker)}</span><span class="h1">${esc(titel)}${ICON.down}</span></button>`
+          : `<div><div class="kicker">${esc(kicker)}</div><h1>${esc(titel)}</h1></div>`}
         ${agenda ? `<div class="navbtns">
           <button class="iconbtn" data-action="prev" aria-label="Vorige">${ICON.left}</button>
           <button class="iconbtn" data-action="next" aria-label="Volgende">${ICON.right}</button></div>` : ''}
@@ -278,7 +283,7 @@ function shellHtml() {
         <button class="${S.view === 'dag' ? 'on' : ''}" data-action="view" data-v="dag">Dag</button>
         <button class="${S.view === 'week' ? 'on' : ''}" data-action="view" data-v="week">Week</button></div>` : ''}
     </header>
-    <main>${inhoud}</main>
+    <main class="${S.anim ? 'veeg-' + S.anim : ''}">${inhoud}</main>
     ${agenda ? `<button class="fab" data-action="nieuw">${ICON.plus}Afspraak</button>` : ''}
     <nav class="bottomnav">
       <button class="${agenda ? 'on' : ''}" data-action="view" data-v="dag">${ICON.cal}Agenda</button>
@@ -443,6 +448,7 @@ function renderSheet() {
   else if (F.type === 'beh') ({ titel, body, footer } = behSheet(F));
   else if (F.type === 'afw') ({ titel, body, footer } = afwSheet(F));
   else if (F.type === 'sluit') ({ titel, body, footer } = sluitSheet(F));
+  else if (F.type === 'kal') ({ titel, body, footer } = kalSheet(F));
   sheetEl.innerHTML = `<div class="overlay" data-action="sluitbuiten"><div class="panel" role="dialog" aria-modal="true" aria-label="${esc(titel)}">
     <header><h1>${esc(titel)}</h1><button class="iconbtn plain" data-action="sluit" aria-label="Sluiten">${ICON.close}</button></header>
     <div class="body">${body}</div>
@@ -762,6 +768,103 @@ async function bewaarAfw() {
   await refresh();
 }
 
+// ---------- Naar een andere datum ----------
+async function naarDatum(anim = null) {
+  S.appts = []; S.afw = [];          // geen afspraken van de vorige dag tonen
+  S.anim = anim;
+  render();
+  await refresh();
+}
+
+// Eén dag (of week) vooruit/achteruit; anim = veeg-animatie
+async function verschuif(dir, anim = null) {
+  S.date = S.view === 'week' ? addDays(S.date, 7 * dir) : nextOpen(addDays(S.date, dir), dir);
+  await naarDatum(anim);
+}
+
+// Vegen naar links/rechts in de agenda
+let veeg = null;
+document.addEventListener('touchstart', (e) => {
+  veeg = null;
+  if (S.sheet || !S.session || !(S.view === 'dag' || S.view === 'week')) return;
+  if (!e.target.closest('main') || e.touches.length !== 1) return;
+  const t = e.touches[0];
+  veeg = { x: t.clientX, y: t.clientY, t: Date.now() };
+}, { passive: true });
+document.addEventListener('touchend', (e) => {
+  if (!veeg) return;
+  const t = e.changedTouches[0];
+  const dx = t.clientX - veeg.x, dy = t.clientY - veeg.y, dt = Date.now() - veeg.t;
+  veeg = null;
+  if (Math.abs(dx) > 60 && Math.abs(dx) > 1.5 * Math.abs(dy) && dt < 700) {
+    verschuif(dx < 0 ? 1 : -1, dx < 0 ? 'links' : 'rechts');
+  }
+}, { passive: true });
+
+// ---------- Maandkalender ----------
+function openKalender() {
+  S.sheet = { type: 'kal', jaar: S.date.getFullYear(), maand: S.date.getMonth(), bezetting: null };
+  laadBezetting();
+}
+
+function kalBereik(F) {
+  const eerste = new Date(F.jaar, F.maand, 1);
+  const laatste = new Date(F.jaar, F.maand + 1, 0);
+  return { van: monday(eerste), tot: addDays(monday(laatste), 7) };
+}
+
+async function laadBezetting() {
+  const F = S.sheet;
+  F.bezetting = null;
+  renderSheet();
+  const { van, tot } = kalBereik(F);
+  const { data, error } = await sb.from('afspraken').select('start_tijd,eind_tijd')
+    .eq('geannuleerd', false).gte('start_tijd', van.toISOString()).lt('start_tijd', tot.toISOString());
+  if (S.sheet !== F) return;
+  if (error) { toast(foutmelding(error)); return; }
+  const min = {};
+  for (const a of data) {
+    const k = key(new Date(a.start_tijd));
+    min[k] = (min[k] || 0) + (new Date(a.eind_tijd) - new Date(a.start_tijd)) / 60000;
+  }
+  F.bezetting = min;
+  renderSheet();
+}
+
+function kalSheet(F) {
+  const { van, tot } = kalBereik(F);
+  const capaciteit = Math.max(1, actieveMeds().length) * (C.DAG_EIND - C.DAG_START);
+  const vandaagK = key(today());
+  const gekozenK = key(S.date);
+  let rijen = '';
+  for (let ma = van; ma < tot; ma = addDays(ma, 7)) {
+    rijen += `<button class="kwk" data-action="kalweek" data-date="${key(ma)}" aria-label="Week ${isoWeek(ma)}">${isoWeek(ma)}</button>`;
+    for (let i = 0; i < 7; i++) {
+      const d = addDays(ma, i);
+      const k = key(d);
+      const dicht = !isOpen(d) || geslotenOp(d);
+      const cls = ['kdag', d.getMonth() !== F.maand ? 'buiten' : '', dicht ? 'dicht' : '', k === vandaagK ? 'vandaag' : '', k === gekozenK ? 'gekozen' : ''].join(' ');
+      const pct = !dicht && F.bezetting ? Math.min(100, Math.round(((F.bezetting[k] || 0) / capaciteit) * 100)) : 0;
+      const label = `${DAGEN[d.getDay()]} ${d.getDate()} ${MAANDLANG[d.getMonth()]}${geslotenOp(d) ? ', gesloten' : ''}${pct ? `, ${pct}% bezet` : ''}`;
+      rijen += `<button class="${cls}" data-action="kaldag" data-date="${k}" aria-label="${esc(label)}">
+        <span>${d.getDate()}</span>${!dicht ? `<span class="kbar"><span style="width:${pct}%"></span></span>` : ''}</button>`;
+    }
+  }
+  const body = `
+    <div class="kalnav">
+      <button class="iconbtn" data-action="kalprev" aria-label="Vorige maand">${ICON.left}</button>
+      <span class="kaltitel">${cap(MAANDLANG[F.maand])} ${F.jaar}</span>
+      <button class="iconbtn" data-action="kalnext" aria-label="Volgende maand">${ICON.right}</button>
+    </div>
+    <div class="kal">
+      <span class="kh">wk</span>${['ma', 'di', 'wo', 'do', 'vr', 'za', 'zo'].map((x) => `<span class="kh">${x}</span>`).join('')}
+      ${rijen}
+    </div>
+    <div class="hint">Tik op een dag voor het dagoverzicht, of op een weeknummer voor het weekoverzicht.
+      Het balkje laat zien hoe vol een dag is${F.bezetting ? '' : ' (laden…)'}. Grijs = gesloten.</div>`;
+  return { titel: 'Kies een datum', body, footer: `<button class="secondary" data-action="kalvandaag">Vandaag</button>` };
+}
+
 // ---------- Sluitingsdag ----------
 function sluitSheet(F) {
   const z = F.z;
@@ -803,19 +906,20 @@ const acties = {
   async view(el) {
     S.view = el.dataset.v;
     if (S.view === 'dag' && !isOpen(S.date)) S.date = nextOpen(S.date);
-    render();
-    await refresh();
+    await naarDatum();
   },
-  async prev() {
-    S.date = S.view === 'week' ? addDays(S.date, -7) : nextOpen(addDays(S.date, -1), -1);
-    render(); await refresh();
-  },
-  async next() {
-    S.date = S.view === 'week' ? addDays(S.date, 7) : nextOpen(addDays(S.date, 1), 1);
-    render(); await refresh();
-  },
-  async vandaag() { S.date = S.view === 'week' ? today() : nextOpen(today()); render(); await refresh(); },
-  async goday(el) { S.date = fromKey(el.dataset.date); S.view = 'dag'; render(); await refresh(); },
+  prev() { verschuif(-1); },
+  next() { verschuif(1); },
+  async vandaag() { S.date = S.view === 'week' ? today() : nextOpen(today()); await naarDatum(); },
+  async goday(el) { S.date = fromKey(el.dataset.date); S.view = 'dag'; await naarDatum(); },
+
+  // kalender
+  kalender() { openKalender(); },
+  kalprev() { const F = S.sheet; F.maand--; if (F.maand < 0) { F.maand = 11; F.jaar--; } laadBezetting(); },
+  kalnext() { const F = S.sheet; F.maand++; if (F.maand > 11) { F.maand = 0; F.jaar++; } laadBezetting(); },
+  async kaldag(el) { closeSheet(); S.date = fromKey(el.dataset.date); S.view = 'dag'; await naarDatum(); },
+  async kalweek(el) { closeSheet(); S.date = fromKey(el.dataset.date); S.view = 'week'; await naarDatum(); },
+  async kalvandaag() { closeSheet(); S.date = nextOpen(today()); S.view = 'dag'; await naarDatum(); },
   nieuw() { openNieuw(); },
   slot(el, ev) {
     const r = el.getBoundingClientRect();

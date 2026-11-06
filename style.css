@@ -153,6 +153,32 @@ textarea.input { height: 80px; padding: 10px 14px; resize: vertical; }
 .login .brand { font-size: 14px; text-align: center; margin-bottom: 10px; }
 .err { color: var(--danger); font-size: 14px; }
 
+/* ---------- Titel als knop + kalender ---------- */
+.titelknop { background: none; border: none; padding: 4px 8px 4px 0; text-align: left; cursor: pointer; display: flex; flex-direction: column; min-height: 44px; border-radius: 10px; }
+.titelknop .h1 { font-size: 24px; font-weight: 500; display: flex; align-items: center; }
+.titelknop:hover .h1 { color: var(--accent); }
+.kalnav { display: flex; align-items: center; justify-content: space-between; }
+.kaltitel { font-size: 20px; font-weight: 500; }
+.kal { display: grid; grid-template-columns: 34px repeat(7, minmax(0, 1fr)); gap: 4px; }
+.kh { font-size: 12px; color: var(--muted); text-align: center; padding: 4px 0; text-transform: uppercase; letter-spacing: .05em; }
+.kwk { border: none; background: transparent; color: var(--muted); font-size: 12px; cursor: pointer; border-radius: 8px; min-height: 48px; }
+.kwk:hover { background: var(--surface); color: var(--accent); }
+.kdag { min-height: 48px; border-radius: 10px; border: 1px solid transparent; background: var(--surface); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px; cursor: pointer; font-size: 16px; padding: 4px 0; }
+.kdag.buiten { opacity: .45; }
+.kdag.dicht { background: transparent; color: #8C7A74; border: 1px dashed var(--line-soft); }
+.kdag.vandaag { border-color: var(--accent); }
+.kdag.gekozen { background: var(--accent); color: var(--bg); font-weight: 600; }
+.kbar { width: 70%; height: 4px; border-radius: 2px; background: rgba(239,227,222,.12); overflow: hidden; }
+.kbar span { display: block; height: 100%; background: var(--accent); }
+.kdag.gekozen .kbar { background: rgba(36,26,24,.25); }
+.kdag.gekozen .kbar span { background: var(--bg); }
+
+/* ---------- Veeg-animatie ---------- */
+main.veeg-links { animation: veegL .22s ease-out; }
+main.veeg-rechts { animation: veegR .22s ease-out; }
+@keyframes veegL { from { transform: translateX(40px); opacity: .3; } to { transform: none; opacity: 1; } }
+@keyframes veegR { from { transform: translateX(-40px); opacity: .3; } to { transform: none; opacity: 1; } }
+
 /* ---------- Toast ---------- */
 #toast { position: fixed; left: 50%; bottom: calc(150px + var(--safe-b)); transform: translateX(-50%); background: var(--surface2); border: 1px solid var(--line); padding: 10px 16px; border-radius: 12px; font-size: 14px; z-index: 50; opacity: 0; pointer-events: none; transition: opacity .2s; max-width: 90vw; }
 #toast.show { opacity: 1; }
