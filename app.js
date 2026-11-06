@@ -62,6 +62,7 @@ function toast(msg) {
 function foutmelding(err) {
   if (!err) return 'Onbekende fout';
   if (err.code === '23P01') return 'Dit tijdslot is net bezet geraakt. Kies een andere tijd.';
+  if (err.code === '42501') return 'Dit account mag alleen lezen, niet wijzigen.';
   return err.message || String(err);
 }
 
