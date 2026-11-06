@@ -1,0 +1,888 @@
+import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
+import * as C from './config.js';
+
+const sb = createClient(C.SUPABASE_URL, C.SUPABASE_KEY);
+const NSLOTS = (C.DAG_EIND - C.DAG_START) / C.BLOK; // 38 blokken van 15 min
+
+// ===================================================================
+// Hulpfuncties
+// ===================================================================
+const pad = (n) => String(n).padStart(2, '0');
+const key = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+const fromKey = (k) => { const [y, m, d] = k.split('-').map(Number); return new Date(y, m - 1, d); };
+const addDays = (d, n) => { const x = new Date(d.getFullYear(), d.getMonth(), d.getDate()); x.setDate(x.getDate() + n); return x; };
+const atMin = (d, min) => new Date(d.getFullYear(), d.getMonth(), d.getDate(), Math.floor(min / 60), min % 60);
+const minOfDay = (dt) => dt.getHours() * 60 + dt.getMinutes();
+const fmtMin = (m) => `${Math.floor(m / 60)}:${pad(m % 60)}`;
+const fmtTime = (dt) => fmtMin(minOfDay(dt));
+const today = () => { const n = new Date(); return new Date(n.getFullYear(), n.getMonth(), n.getDate()); };
+const sameDay = (a, b) => key(a) === key(b);
+const isOpen = (d) => C.OPEN_DAGEN.includes(d.getDay());
+const nextOpen = (d, dir = 1) => { let x = d; for (let i = 0; i < 7 && !isOpen(x); i++) x = addDays(x, dir); return x; };
+const monday = (d) => addDays(d, 1 - (d.getDay() || 7));
+function isoWeek(d) {
+  const t = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+  t.setUTCDate(t.getUTCDate() + 4 - (t.getUTCDay() || 7));
+  const y0 = new Date(Date.UTC(t.getUTCFullYear(), 0, 1));
+  return Math.ceil(((t - y0) / 86400000 + 1) / 7);
+}
+const DAGEN = ['zondag', 'maandag', 'dinsdag', 'woensdag', 'donderdag', 'vrijdag', 'zaterdag'];
+const DAGK = ['ZO', 'MA', 'DI', 'WO', 'DO', 'VR', 'ZA'];
+const MAAND = ['jan', 'feb', 'mrt', 'apr', 'mei', 'jun', 'jul', 'aug', 'sep', 'okt', 'nov', 'dec'];
+const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+const fmtDate = (d) => `${DAGK[d.getDay()].toLowerCase()} ${d.getDate()} ${MAAND[d.getMonth()]}`;
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const cssVarPx = (name) => parseFloat(getComputedStyle(document.documentElement).getPropertyValue(name)) || 24;
+const tijdOpties = (sel, vanaf = C.DAG_START, tot = C.DAG_EIND) => {
+  let h = '';
+  for (let m = vanaf; m <= tot; m += C.BLOK) h += `<option value="${m}" ${m === sel ? 'selected' : ''}>${fmtMin(m)}</option>`;
+  return h;
+};
+
+const ICON = {
+  left: '<svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>',
+  right: '<svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg>',
+  plus: '<svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>',
+  close: '<svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>',
+  cal: '<svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></svg>',
+  users: '<svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.8-3.5 3.4-5.5 6.5-5.5s5.7 2 6.5 5.5M16 4.5a3.5 3.5 0 010 7M18 14.8c1.9.7 3.1 2.5 3.5 5.2"/></svg>',
+  gear: '<svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M2 12h3M19 12h3M4.9 19.1L7 17M17 7l2.1-2.1"/></svg>',
+  check: '<svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5 9-10"/></svg>',
+};
+
+let toastTimer;
+function toast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove('show'), 3200);
+}
+
+function foutmelding(err) {
+  if (!err) return 'Onbekende fout';
+  if (err.code === '23P01') return 'Dit tijdslot is net bezet geraakt. Kies een andere tijd.';
+  return err.message || String(err);
+}
+
+// ===================================================================
+// Toestand
+// ===================================================================
+const S = {
+  session: null,
+  view: 'dag',
+  date: nextOpen(today()),
+  meds: [],
+  beh: [],
+  appts: [],
+  afw: [],
+  kq: '',
+  klanten: [],
+  afwLijst: [],
+  sheet: null,
+};
+const actieveMeds = () => S.meds.filter((m) => m.actief);
+const medById = (id) => S.meds.find((m) => m.id === id);
+const behNamen = (a) => (a.afspraak_behandelingen || []).map((x) => x.behandeling?.naam).filter(Boolean).join(' + ');
+
+// ===================================================================
+// Gegevens ophalen
+// ===================================================================
+async function loadBase() {
+  const [m, b] = await Promise.all([
+    sb.from('medewerkers').select('*').order('id'),
+    sb.from('behandelingen').select('*').order('volgorde').order('id'),
+  ]);
+  if (m.error) throw m.error;
+  if (b.error) throw b.error;
+  S.meds = m.data;
+  S.beh = b.data;
+}
+
+async function fetchRange(from, to) {
+  const [a, w] = await Promise.all([
+    sb.from('afspraken')
+      .select('*, klant:klanten(id,naam,telefoon), afspraak_behandelingen(behandeling:behandelingen(id,naam))')
+      .eq('geannuleerd', false)
+      .gte('start_tijd', from.toISOString())
+      .lt('start_tijd', to.toISOString())
+      .order('start_tijd'),
+    sb.from('afwezigheid').select('*')
+      .lt('start_tijd', to.toISOString())
+      .gt('eind_tijd', from.toISOString()),
+  ]);
+  if (a.error) throw a.error;
+  if (w.error) throw w.error;
+  return { appts: a.data, afw: w.data };
+}
+
+function huidigBereik() {
+  if (S.view === 'week') {
+    const ma = monday(S.date);
+    return { from: addDays(ma, 1), to: addDays(ma, 6) };
+  }
+  return { from: S.date, to: addDays(S.date, 1) };
+}
+
+async function loadRange() {
+  const { from, to } = huidigBereik();
+  const r = await fetchRange(from, to);
+  S.appts = r.appts;
+  S.afw = r.afw;
+}
+
+async function loadKlanten() {
+  let q = sb.from('klanten').select('*').order('naam').limit(60);
+  const zoek = S.kq.trim().replace(/[,()%*]/g, ' ').trim();
+  if (zoek) q = q.or(`naam.ilike.%${zoek}%,telefoon.ilike.%${zoek}%`);
+  const { data, error } = await q;
+  if (error) throw error;
+  S.klanten = data;
+}
+
+async function loadAfwLijst() {
+  const { data, error } = await sb.from('afwezigheid').select('*')
+    .gte('eind_tijd', today().toISOString()).order('start_tijd');
+  if (error) throw error;
+  S.afwLijst = data;
+}
+
+async function refresh() {
+  try {
+    if (S.view === 'dag' || S.view === 'week') await loadRange();
+    else if (S.view === 'klanten') await loadKlanten();
+    else if (S.view === 'instellingen') await Promise.all([loadBase(), loadAfwLijst()]);
+    render();
+  } catch (e) { toast(foutmelding(e)); }
+}
+
+// Bezette blokken voor één medewerker op één dag
+function bezet(medId, date, appts, afw) {
+  const b = new Array(NSLOTS).fill(false);
+  const start = atMin(date, C.DAG_START).getTime();
+  const markeer = (s, e) => {
+    const a = Math.max(0, Math.floor((s - start) / 60000 / C.BLOK));
+    const z = Math.min(NSLOTS, Math.ceil((e - start) / 60000 / C.BLOK));
+    for (let i = a; i < z; i++) b[i] = true;
+  };
+  appts.filter((x) => x.medewerker_id === medId).forEach((x) => markeer(new Date(x.start_tijd).getTime(), new Date(x.eind_tijd).getTime()));
+  afw.filter((x) => x.medewerker_id === medId).forEach((x) => markeer(new Date(x.start_tijd).getTime(), new Date(x.eind_tijd).getTime()));
+  return b;
+}
+
+function vrijeStarts(busy, n, date) {
+  const res = [];
+  const nu = new Date();
+  for (let i = 0; i + n <= NSLOTS; i++) {
+    if (busy.slice(i, i + n).some(Boolean)) continue;
+    if (atMin(date, C.DAG_START + i * C.BLOK) <= nu) continue;
+    res.push(i);
+  }
+  return res;
+}
+
+// ===================================================================
+// Weergave: hoofdscherm
+// ===================================================================
+const app = document.getElementById('app');
+const sheetEl = document.getElementById('sheet');
+
+function render() {
+  if (!S.session) { app.innerHTML = loginHtml(); return; }
+  const oud = document.getElementById('scroll');
+  const bewaar = oud && oud.dataset.view === S.view + key(S.date) ? oud.scrollTop : null;
+  app.innerHTML = shellHtml();
+  const sc = document.getElementById('scroll');
+  if (sc) {
+    if (bewaar !== null) sc.scrollTop = bewaar;
+    else if (S.view === 'dag' && sameDay(S.date, today())) {
+      const m = minOfDay(new Date()) - C.DAG_START - 60;
+      sc.scrollTop = Math.max(0, (m / C.BLOK) * cssVarPx('--slot'));
+    }
+  }
+}
+
+function loginHtml(fout = '') {
+  return `<div class="login"><form data-form="login">
+    <div class="brand">KAPSALON VAN DE VEN</div>
+    <div class="field"><label for="em">E-mail</label><input class="input" id="em" name="email" type="email" autocomplete="username" required></div>
+    <div class="field"><label for="pw">Wachtwoord</label><input class="input" id="pw" name="password" type="password" autocomplete="current-password" required></div>
+    ${fout ? `<div class="err">${esc(fout)}</div>` : ''}
+    <button class="primary" type="submit">Inloggen</button>
+  </form></div>`;
+}
+
+function shellHtml() {
+  const agenda = S.view === 'dag' || S.view === 'week';
+  let kicker = '', titel = '';
+  if (S.view === 'dag') {
+    kicker = `WEEK ${isoWeek(S.date)}`;
+    titel = `${cap(DAGEN[S.date.getDay()])} ${S.date.getDate()} ${MAAND[S.date.getMonth()]}`;
+  } else if (S.view === 'week') {
+    const ma = monday(S.date);
+    kicker = `${addDays(ma, 1).getDate()} ${MAAND[addDays(ma, 1).getMonth()]} – ${addDays(ma, 5).getDate()} ${MAAND[addDays(ma, 5).getMonth()]} ${addDays(ma, 5).getFullYear()}`;
+    titel = `Week ${isoWeek(S.date)}`;
+  } else if (S.view === 'klanten') titel = 'Klanten';
+  else titel = 'Instellingen';
+
+  let inhoud = '';
+  if (S.view === 'dag') inhoud = dagHtml();
+  else if (S.view === 'week') inhoud = weekHtml();
+  else if (S.view === 'klanten') inhoud = klantenHtml();
+  else inhoud = instellingenHtml();
+
+  return `<div class="shell">
+    <header class="top">
+      <div class="brandrow"><span class="brand">KAPSALON VAN DE VEN</span>
+        ${agenda ? `<button class="textbtn" data-action="vandaag">Vandaag</button>` : ''}</div>
+      <div class="titlerow">
+        <div><div class="kicker">${esc(kicker)}</div><h1>${esc(titel)}</h1></div>
+        ${agenda ? `<div class="navbtns">
+          <button class="iconbtn" data-action="prev" aria-label="Vorige">${ICON.left}</button>
+          <button class="iconbtn" data-action="next" aria-label="Volgende">${ICON.right}</button></div>` : ''}
+      </div>
+      ${agenda ? `<div class="seg">
+        <button class="${S.view === 'dag' ? 'on' : ''}" data-action="view" data-v="dag">Dag</button>
+        <button class="${S.view === 'week' ? 'on' : ''}" data-action="view" data-v="week">Week</button></div>` : ''}
+    </header>
+    <main>${inhoud}</main>
+    ${agenda ? `<button class="fab" data-action="nieuw">${ICON.plus}Afspraak</button>` : ''}
+    <nav class="bottomnav">
+      <button class="${agenda ? 'on' : ''}" data-action="view" data-v="dag">${ICON.cal}Agenda</button>
+      <button class="${S.view === 'klanten' ? 'on' : ''}" data-action="view" data-v="klanten">${ICON.users}Klanten</button>
+      <button class="${S.view === 'instellingen' ? 'on' : ''}" data-action="view" data-v="instellingen">${ICON.gear}Instellingen</button>
+    </nav>
+  </div>`;
+}
+
+function tijdkolom(slotPx) {
+  let h = '';
+  for (let m = C.DAG_START; m <= C.DAG_EIND - 30; m += 60) h += `<span style="top:${((m - C.DAG_START) / C.BLOK) * slotPx}px">${fmtMin(m)}</span>`;
+  return `<div class="timecol">${h}</div>`;
+}
+
+function afwBlok(a, date, slotPx, cls) {
+  const ds = atMin(date, C.DAG_START), de = atMin(date, C.DAG_EIND);
+  const s = Math.max(new Date(a.start_tijd), ds), e = Math.min(new Date(a.eind_tijd), de);
+  if (e <= s) return '';
+  const top = ((s - ds) / 60000 / C.BLOK) * slotPx;
+  const h = ((e - s) / 60000 / C.BLOK) * slotPx;
+  if (cls === 'wafw') return `<div class="wafw" style="top:${top + 1}px;height:${h - 2}px" title="${esc(a.reden || 'Afwezig')}"></div>`;
+  return `<div class="afw" style="top:${top + 2}px;height:${h - 4}px">${esc(a.reden || 'Afwezig')}</div>`;
+}
+
+function dagHtml() {
+  if (!isOpen(S.date)) return `<div class="closed">Op ${DAGEN[S.date.getDay()]} is de salon gesloten.</div>`;
+  const meds = actieveMeds();
+  const slotPx = cssVarPx('--slot');
+  const cols = `40px repeat(${meds.length}, minmax(0, 1fr))`;
+  const ds = atMin(S.date, C.DAG_START);
+  const isVandaag = sameDay(S.date, today());
+  const nuMin = minOfDay(new Date());
+  const nuLijn = isVandaag && nuMin >= C.DAG_START && nuMin <= C.DAG_EIND
+    ? `<div class="nowline" style="top:${((nuMin - C.DAG_START) / C.BLOK) * slotPx}px"></div>` : '';
+
+  const kolommen = meds.map((m) => {
+    const appts = S.appts.filter((a) => a.medewerker_id === m.id).map((a) => {
+      const s = new Date(a.start_tijd), e = new Date(a.eind_tijd);
+      const n = Math.round((e - s) / 60000 / C.BLOK);
+      const top = ((s - ds) / 60000 / C.BLOK) * slotPx;
+      const st = `top:${top + 2}px;height:${n * slotPx - 4}px;background:${m.kleur}2E;border-color:${m.kleur}8C`;
+      const naam = a.klant?.naam || '';
+      const beh = behNamen(a);
+      if (n <= 1) return `<div class="appt kort" style="${st}" data-action="appt" data-id="${a.id}"><b class="k">${fmtTime(s)}</b> ${esc(naam || beh)}</div>`;
+      return `<div class="appt" style="${st}" data-action="appt" data-id="${a.id}">
+        <span class="t">${fmtTime(s)} – ${fmtTime(e)}</span>
+        <span class="k">${esc(naam || '—')}</span>
+        <span class="b">${esc(beh)}</span></div>`;
+    }).join('');
+    const afw = S.afw.filter((a) => a.medewerker_id === m.id).map((a) => afwBlok(a, S.date, slotPx, 'afw')).join('');
+    return `<div class="col" data-action="slot" data-med="${m.id}">${afw}${appts}${nuLijn}</div>`;
+  }).join('');
+
+  return `<div class="dayhead" style="grid-template-columns:${cols}"><span></span>
+      ${meds.map((m) => `<div class="staffname"><span class="dot" style="background:${m.kleur}"></span>${esc(m.naam)}</div>`).join('')}
+    </div>
+    <div class="scroll" id="scroll" data-view="dag${key(S.date)}">
+      <div class="daygrid" style="grid-template-columns:${cols};height:${NSLOTS * slotPx}px">${tijdkolom(slotPx)}${kolommen}</div>
+    </div>`;
+}
+
+function weekHtml() {
+  const meds = actieveMeds();
+  const slotPx = cssVarPx('--slot-week');
+  const ma = monday(S.date);
+  const dagen = [1, 2, 3, 4, 5].map((i) => addDays(ma, i));
+  const kop = dagen.map((d) => `<button class="wday ${sameDay(d, today()) ? 'today' : ''}" data-action="goday" data-date="${key(d)}">
+      <span class="dw">${DAGK[d.getDay()]}</span><span class="dt">${d.getDate()}</span></button>`).join('');
+  const kolommen = dagen.map((d) => {
+    const ds = atMin(d, C.DAG_START);
+    const subs = meds.map((m) => {
+      const appts = S.appts.filter((a) => a.medewerker_id === m.id && sameDay(new Date(a.start_tijd), d)).map((a) => {
+        const s = new Date(a.start_tijd), e = new Date(a.eind_tijd);
+        const n = Math.round((e - s) / 60000 / C.BLOK);
+        const top = ((s - ds) / 60000 / C.BLOK) * slotPx;
+        const label = n >= 2 ? (a.klant?.naam || behNamen(a)) : '';
+        const tip = `${fmtTime(s)} ${a.klant?.naam || ''} – ${behNamen(a)}`;
+        return `<div class="wappt" style="top:${top + 1}px;height:${n * slotPx - 2}px;background:${m.kleur}33;border-color:${m.kleur}99" data-action="appt" data-id="${a.id}" title="${esc(tip)}">${esc(label)}</div>`;
+      }).join('');
+      const afw = S.afw.filter((a) => a.medewerker_id === m.id).map((a) => afwBlok(a, d, slotPx, 'wafw')).join('');
+      return `<div class="wsub">${afw}${appts}</div>`;
+    }).join('');
+    return `<div class="wcol" style="grid-template-columns:repeat(${meds.length}, minmax(0, 1fr))">${subs}</div>`;
+  }).join('');
+  return `<div class="legend">${meds.map((m) => `<span><span class="dot" style="background:${m.kleur}"></span>${esc(m.naam)}</span>`).join('')}</div>
+    <div class="weekhead"><span></span>${kop}</div>
+    <div class="scroll" id="scroll" data-view="week${key(S.date)}">
+      <div class="weekgrid" style="height:${NSLOTS * slotPx}px">${tijdkolom(slotPx)}${kolommen}</div>
+    </div>`;
+}
+
+function klantRijen() {
+  if (!S.klanten.length) return `<div class="empty">${S.kq ? 'Geen klanten gevonden.' : 'Nog geen klanten.'}</div>`;
+  return S.klanten.map((k) => `<button class="row" data-action="klant" data-id="${k.id}">
+      <span>${esc(k.naam)}<br><span class="sub">${esc(k.telefoon || '')}</span></span>${ICON.right}</button>`).join('');
+}
+
+function klantenHtml() {
+  return `<div class="page">
+    <div class="field"><label for="kzoek">Zoeken op naam of telefoon</label>
+      <input class="input" id="kzoek" data-zoek="lijst" value="${esc(S.kq)}" autocomplete="off"></div>
+    <div class="list" id="klijst">${klantRijen()}</div>
+    <button class="secondary" data-action="nieuweklant">+ Nieuwe klant</button>
+  </div>`;
+}
+
+function instellingenHtml() {
+  const beh = S.beh.map((b) => `<button class="row ${b.actief ? '' : 'off'}" data-action="beh" data-id="${b.id}">
+      <span>${esc(b.naam)}<br><span class="sub">${b.duur_min} min${b.actief ? '' : ' · niet actief'}</span></span>${ICON.right}</button>`).join('');
+  const afw = S.afwLijst.length ? S.afwLijst.map((a) => {
+    const s = new Date(a.start_tijd), e = new Date(a.eind_tijd);
+    const periode = sameDay(s, e) ? `${fmtDate(s)} ${fmtTime(s)}–${fmtTime(e)}` : `${fmtDate(s)} ${fmtTime(s)} – ${fmtDate(e)} ${fmtTime(e)}`;
+    return `<div class="row" style="cursor:default"><span>${esc(medById(a.medewerker_id)?.naam || '?')}${a.reden ? ' · ' + esc(a.reden) : ''}<br><span class="sub">${periode}</span></span>
+      <button class="textbtn danger" style="color:var(--danger)" data-action="delafw" data-id="${a.id}">Verwijderen</button></div>`;
+  }).join('') : '<div class="empty">Geen geplande afwezigheid.</div>';
+  return `<div class="page">
+    <section><h2>BEHANDELINGEN</h2><div class="list">${beh}</div>
+      <button class="secondary" style="margin-top:10px" data-action="nieuwebeh">+ Behandeling</button></section>
+    <section><h2>AFWEZIGHEID / VAKANTIE</h2><div class="list">${afw}</div>
+      <button class="secondary" style="margin-top:10px" data-action="nieuweafw">+ Afwezigheid</button></section>
+    <section><h2>ACCOUNT</h2><button class="secondary danger" data-action="logout">Uitloggen</button></section>
+  </div>`;
+}
+
+// ===================================================================
+// Weergave: pop-ups (sheets)
+// ===================================================================
+function renderSheet() {
+  const F = S.sheet;
+  if (!F) { sheetEl.innerHTML = ''; return; }
+  const oudeBody = sheetEl.querySelector('.body');
+  const scroll = oudeBody ? oudeBody.scrollTop : 0;
+  let titel = '', body = '', footer = '';
+  if (F.type === 'nieuw') ({ titel, body, footer } = nieuwSheet(F));
+  else if (F.type === 'appt') ({ titel, body, footer } = apptSheet(F));
+  else if (F.type === 'klant') ({ titel, body, footer } = klantSheet(F));
+  else if (F.type === 'beh') ({ titel, body, footer } = behSheet(F));
+  else if (F.type === 'afw') ({ titel, body, footer } = afwSheet(F));
+  sheetEl.innerHTML = `<div class="overlay" data-action="sluitbuiten"><div class="panel" role="dialog" aria-modal="true" aria-label="${esc(titel)}">
+    <header><h1>${esc(titel)}</h1><button class="iconbtn plain" data-action="sluit" aria-label="Sluiten">${ICON.close}</button></header>
+    <div class="body">${body}</div>
+    ${footer ? `<footer>${footer}</footer>` : ''}
+  </div></div>`;
+  const nb = sheetEl.querySelector('.body');
+  if (nb) nb.scrollTop = scroll;
+}
+
+function closeSheet() { S.sheet = null; renderSheet(); }
+
+// ---------- Nieuwe afspraak ----------
+async function openNieuw(opts = {}) {
+  const meds = actieveMeds();
+  const d = opts.date ? fromKey(opts.date) : (isOpen(S.date) ? S.date : nextOpen(S.date));
+  S.sheet = {
+    type: 'nieuw',
+    klant: null, nieuweKlant: false, kq: '', results: [], kNaam: '', kTel: '',
+    med: opts.med ?? meds[0]?.id,
+    beh: [],
+    date: key(d),
+    slot: opts.slot ?? null,
+    door: Number(localStorage.getItem('ingepland_door')) || null,
+    notitie: '',
+    dag: null,
+    bezig: false,
+  };
+  renderSheet();
+  await laadVrij();
+}
+
+async function laadVrij() {
+  const F = S.sheet;
+  if (!F || F.type !== 'nieuw') return;
+  F.dag = null;
+  renderSheet();
+  try {
+    const d = fromKey(F.date);
+    F.dag = await fetchRange(d, addDays(d, 1));
+  } catch (e) { toast(foutmelding(e)); }
+  if (S.sheet === F) renderSheet();
+}
+
+function duurVan(F) {
+  return F.beh.reduce((s, id) => s + (S.beh.find((b) => b.id === id)?.duur_min || 0), 0);
+}
+
+function vrijeTijden(F) {
+  const d = fromKey(F.date);
+  const n = duurVan(F) / C.BLOK;
+  if (!F.dag || !n || !F.med || !isOpen(d)) return [];
+  return vrijeStarts(bezet(F.med, d, F.dag.appts, F.dag.afw), n, d);
+}
+
+function klantResultaten(F) {
+  if (!F.kq.trim()) return '';
+  if (!F.results.length) return '<div class="hint">Geen klant gevonden.</div>';
+  return `<div class="results">${F.results.map((k) => `<button data-action="kiesklant" data-id="${k.id}">${esc(k.naam)} <span class="hint">${esc(k.telefoon || '')}</span></button>`).join('')}</div>`;
+}
+
+function nieuwSheet(F) {
+  const meds = actieveMeds();
+  const d = fromKey(F.date);
+  const duur = duurVan(F);
+  const vrij = vrijeTijden(F);
+  if (F.slot !== null && !vrij.includes(F.slot) && F.dag && duur) F.slot = null;
+
+  let klant;
+  if (F.klant) {
+    klant = `<div class="picked"><span>${esc(F.klant.naam)}<br><span class="hint">${esc(F.klant.telefoon || '')}</span></span>
+      <button class="textbtn" data-action="wisklant">Wijzigen</button></div>`;
+  } else if (F.nieuweKlant) {
+    klant = `<div class="two">
+        <input class="input" data-bind="kNaam" placeholder="Naam" value="${esc(F.kNaam)}" aria-label="Naam nieuwe klant">
+        <input class="input" data-bind="kTel" placeholder="Telefoon" inputmode="tel" value="${esc(F.kTel)}" aria-label="Telefoon nieuwe klant"></div>
+      <button class="textbtn" style="align-self:flex-start" data-action="zoekklant">Bestaande klant zoeken</button>`;
+  } else {
+    klant = `<input class="input" id="kq" data-zoek="sheet" placeholder="Zoek op naam of telefoon" value="${esc(F.kq)}" autocomplete="off" aria-label="Klant zoeken">
+      <div id="kresults">${klantResultaten(F)}</div>
+      <button class="textbtn" style="align-self:flex-start" data-action="nieuweklantinline">+ Nieuwe klant</button>`;
+  }
+
+  let tijden;
+  if (!isOpen(d)) tijden = `<div class="hint">Op ${DAGEN[d.getDay()]} is de salon gesloten.</div>`;
+  else if (!duur) tijden = '<div class="hint">Kies eerst een of meer behandelingen.</div>';
+  else if (!F.dag) tijden = '<div class="hint">Vrije tijden laden…</div>';
+  else if (!vrij.length) tijden = '<div class="hint">Geen ruimte meer op deze dag.</div>';
+  else tijden = `<div class="chips grid4">${vrij.map((i) => `<button class="chip ${F.slot === i ? 'on' : ''}" data-action="kiestijd" data-slot="${i}">${fmtMin(C.DAG_START + i * C.BLOK)}</button>`).join('')}</div>`;
+
+  const medNaam = medById(F.med)?.naam || '';
+  const klaar = (F.klant || (F.nieuweKlant && F.kNaam.trim())) && F.med && duur && F.slot !== null && F.door && !F.bezig;
+  const tijdTekst = F.slot !== null ? ` · ${fmtMin(C.DAG_START + F.slot * C.BLOK)} – ${fmtMin(C.DAG_START + F.slot * C.BLOK + duur)}` : '';
+
+  const body = `
+    <div class="field"><span class="lbl">Klant</span>${klant}</div>
+    <div class="field"><span class="lbl">Medewerker</span>
+      <div class="chips grid3">${meds.map((m) => `<button class="chip ${F.med === m.id ? 'on' : ''}" data-action="kiesmed" data-id="${m.id}"><span class="dot" style="background:${m.kleur}"></span>${esc(m.naam)}</button>`).join('')}</div></div>
+    <div class="field"><span class="lbl">Behandelingen · meerdere mogelijk</span>
+      <div class="chips">${S.beh.filter((b) => b.actief).map((b) => `<button class="chip ${F.beh.includes(b.id) ? 'on' : ''}" data-action="kiesbeh" data-id="${b.id}">${F.beh.includes(b.id) ? ICON.check : ''}${esc(b.naam)} · ${b.duur_min}</button>`).join('')}</div>
+      ${duur ? `<div class="summary"><span>Totale duur</span><b>${duur} min · ${duur / C.BLOK} blokken</b></div>` : ''}</div>
+    <div class="field"><label for="datum">Datum</label>
+      <input class="input" type="date" id="datum" data-bind="date" data-reload="1" value="${F.date}"></div>
+    <div class="field"><span class="lbl">Vrije tijden bij ${esc(medNaam)} · ${fmtDate(d)} · week ${isoWeek(d)}</span>${tijden}</div>
+    <div class="field"><span class="lbl">Ingepland door</span>
+      <div class="chips grid3">${meds.map((m) => `<button class="chip ${F.door === m.id ? 'on' : ''}" data-action="kiesdoor" data-id="${m.id}">${esc(m.naam)}</button>`).join('')}</div></div>
+    <div class="field"><label for="notitie">Notitie (optioneel)</label>
+      <textarea class="input" id="notitie" data-bind="notitie">${esc(F.notitie)}</textarea></div>`;
+  const footer = `<button class="primary" data-action="opslaan" ${klaar ? '' : 'disabled'}>${F.bezig ? 'Opslaan…' : 'Opslaan' + tijdTekst}</button>`;
+  return { titel: 'Nieuwe afspraak', body, footer };
+}
+
+async function zoekKlantenSheet() {
+  const F = S.sheet;
+  if (!F || F.type !== 'nieuw') return;
+  const zoek = F.kq.trim().replace(/[,()%*]/g, ' ').trim();
+  if (zoek.length < 2) { F.results = []; }
+  else {
+    const { data, error } = await sb.from('klanten').select('*')
+      .or(`naam.ilike.%${zoek}%,telefoon.ilike.%${zoek}%`).order('naam').limit(8);
+    if (error) { toast(foutmelding(error)); return; }
+    F.results = data;
+  }
+  const box = document.getElementById('kresults');
+  if (box && S.sheet === F) box.innerHTML = klantResultaten(F);
+}
+
+async function opslaanAfspraak() {
+  const F = S.sheet;
+  F.bezig = true; renderSheet();
+  try {
+    if (!F.klant && F.nieuweKlant) {
+      const { data, error } = await sb.from('klanten').insert({ naam: F.kNaam.trim(), telefoon: F.kTel.trim() || null }).select().single();
+      if (error) throw error;
+      F.klant = data; F.nieuweKlant = false;
+    }
+    const d = fromKey(F.date);
+    const start = atMin(d, C.DAG_START + F.slot * C.BLOK);
+    const eind = new Date(start.getTime() + duurVan(F) * 60000);
+    const { data: afspraak, error } = await sb.from('afspraken').insert({
+      klant_id: F.klant.id,
+      medewerker_id: F.med,
+      start_tijd: start.toISOString(),
+      eind_tijd: eind.toISOString(),
+      notitie: F.notitie.trim() || null,
+      ingepland_door: F.door,
+    }).select('id').single();
+    if (error) throw error;
+    const { error: e2 } = await sb.from('afspraak_behandelingen').insert(F.beh.map((id) => ({ afspraak_id: afspraak.id, behandeling_id: id })));
+    if (e2) throw e2;
+    localStorage.setItem('ingepland_door', String(F.door));
+    closeSheet();
+    if (S.view !== 'week') S.view = 'dag';
+    S.date = d;
+    await refresh();
+    toast(`Afspraak opgeslagen: ${fmtDate(d)} ${fmtTime(start)}`);
+  } catch (e) {
+    F.bezig = false;
+    toast(foutmelding(e));
+    if (e.code === '23P01') { F.slot = null; await laadVrij(); } else renderSheet();
+  }
+}
+
+// ---------- Afspraak bekijken ----------
+function apptSheet(F) {
+  const a = F.a;
+  const s = new Date(a.start_tijd), e = new Date(a.eind_tijd);
+  const m = medById(a.medewerker_id);
+  const door = medById(a.ingepland_door);
+  const tel = a.klant?.telefoon;
+  const body = `<dl class="kv">
+      <dt>Klant</dt><dd>${esc(a.klant?.naam || '—')}</dd>
+      ${tel ? `<dt>Telefoon</dt><dd><a href="tel:${esc(tel.replace(/\s/g, ''))}">${esc(tel)}</a></dd>` : ''}
+      <dt>Wanneer</dt><dd>${cap(DAGEN[s.getDay()])} ${s.getDate()} ${MAAND[s.getMonth()]} · ${fmtTime(s)} – ${fmtTime(e)}</dd>
+      <dt>Medewerker</dt><dd><span class="dot" style="display:inline-block;background:${m?.kleur}"></span> ${esc(m?.naam || '?')}</dd>
+      <dt>Behandeling</dt><dd>${esc(behNamen(a) || '—')}</dd>
+      ${a.notitie ? `<dt>Notitie</dt><dd>${esc(a.notitie)}</dd>` : ''}
+      <dt>Ingepland door</dt><dd>${esc(door?.naam || '—')}</dd>
+    </dl>
+    ${a.klant ? `<button class="secondary" data-action="klant" data-id="${a.klant.id}">Klantkaart openen</button>` : ''}`;
+  const footer = `<button class="secondary danger" data-action="annuleer">Afspraak annuleren</button>`;
+  return { titel: 'Afspraak', body, footer };
+}
+
+// ---------- Klant ----------
+async function openKlant(id) {
+  let k = { naam: '', telefoon: '', email: '', notities: '' };
+  if (id) {
+    const { data, error } = await sb.from('klanten').select('*').eq('id', id).single();
+    if (error) { toast(foutmelding(error)); return; }
+    k = data;
+  }
+  S.sheet = { type: 'klant', k, historie: null };
+  renderSheet();
+  if (id) {
+    const { data, error } = await sb.from('afspraken')
+      .select('*, afspraak_behandelingen(behandeling:behandelingen(id,naam))')
+      .eq('klant_id', id).eq('geannuleerd', false).order('start_tijd', { ascending: false }).limit(20);
+    if (!error && S.sheet?.k === k) { S.sheet.historie = data; renderSheet(); }
+  }
+}
+
+function klantSheet(F) {
+  const k = F.k;
+  let hist = '';
+  if (k.id) {
+    hist = !F.historie ? '<div class="hint">Bezoeken laden…</div>'
+      : !F.historie.length ? '<div class="hint">Nog geen bezoeken.</div>'
+      : `<div class="list">${F.historie.map((a) => {
+          const s = new Date(a.start_tijd);
+          return `<div class="row" style="cursor:default"><span>${fmtDate(s)} ${s.getFullYear()} · ${fmtTime(s)}<br><span class="sub">${esc(behNamen(a))} · ${esc(medById(a.medewerker_id)?.naam || '')}</span></span></div>`;
+        }).join('')}</div>`;
+  }
+  const body = `
+    <div class="field"><label for="kn">Naam</label><input class="input" id="kn" data-bind="k.naam" value="${esc(k.naam)}"></div>
+    <div class="field"><label for="kt">Telefoon</label><input class="input" id="kt" data-bind="k.telefoon" inputmode="tel" value="${esc(k.telefoon || '')}"></div>
+    <div class="field"><label for="ke">E-mail</label><input class="input" id="ke" data-bind="k.email" type="email" value="${esc(k.email || '')}"></div>
+    <div class="field"><label for="kno">Notities</label><textarea class="input" id="kno" data-bind="k.notities">${esc(k.notities || '')}</textarea></div>
+    ${k.id ? `<div class="field"><span class="lbl">Bezoeken</span>${hist}</div>` : ''}`;
+  return { titel: k.id ? 'Klant' : 'Nieuwe klant', body, footer: `<button class="primary" data-action="bewaarklant">Opslaan</button>` };
+}
+
+async function bewaarKlant() {
+  const k = S.sheet.k;
+  if (!k.naam?.trim()) { toast('Vul een naam in'); return; }
+  const rij = { naam: k.naam.trim(), telefoon: k.telefoon?.trim() || null, email: k.email?.trim() || null, notities: k.notities?.trim() || null };
+  const { error } = k.id ? await sb.from('klanten').update(rij).eq('id', k.id) : await sb.from('klanten').insert(rij);
+  if (error) { toast(foutmelding(error)); return; }
+  closeSheet();
+  toast('Klant opgeslagen');
+  await refresh();
+}
+
+// ---------- Behandeling ----------
+function behSheet(F) {
+  const b = F.b;
+  let opties = '';
+  for (let m = 15; m <= 240; m += 15) opties += `<option value="${m}" ${b.duur_min === m ? 'selected' : ''}>${m} min</option>`;
+  const body = `
+    <div class="field"><label for="bn">Naam</label><input class="input" id="bn" data-bind="b.naam" value="${esc(b.naam)}"></div>
+    <div class="field"><label for="bd">Duur</label><select class="input" id="bd" data-bind="b.duur_min" data-num="1">${opties}</select></div>
+    <div class="field"><label for="bv">Volgorde in de lijst</label><input class="input" id="bv" type="number" data-bind="b.volgorde" data-num="1" value="${b.volgorde}"></div>
+    <label class="check"><input type="checkbox" data-bind="b.actief" ${b.actief ? 'checked' : ''}> Actief (zichtbaar bij nieuwe afspraak)</label>
+    <div class="hint">Een behandeling die je uitzet, verdwijnt uit de keuzelijst. Bestaande afspraken blijven kloppen.</div>`;
+  return { titel: b.id ? 'Behandeling' : 'Nieuwe behandeling', body, footer: `<button class="primary" data-action="bewaarbeh">Opslaan</button>` };
+}
+
+async function bewaarBeh() {
+  const b = S.sheet.b;
+  if (!b.naam?.trim()) { toast('Vul een naam in'); return; }
+  const rij = { naam: b.naam.trim(), duur_min: b.duur_min, volgorde: b.volgorde || 0, actief: b.actief };
+  const { error } = b.id ? await sb.from('behandelingen').update(rij).eq('id', b.id) : await sb.from('behandelingen').insert(rij);
+  if (error) { toast(foutmelding(error)); return; }
+  closeSheet();
+  toast('Behandeling opgeslagen');
+  await loadBase();
+  await refresh();
+}
+
+// ---------- Afwezigheid ----------
+function afwSheet(F) {
+  const a = F.a;
+  const meds = actieveMeds();
+  const body = `
+    <div class="field"><span class="lbl">Medewerker</span>
+      <div class="chips grid3">${meds.map((m) => `<button class="chip ${a.med === m.id ? 'on' : ''}" data-action="afwmed" data-id="${m.id}"><span class="dot" style="background:${m.kleur}"></span>${esc(m.naam)}</button>`).join('')}</div></div>
+    <div class="two">
+      <div class="field"><label for="av">Van datum</label><input class="input" type="date" id="av" data-bind="a.van" value="${a.van}"></div>
+      <div class="field"><label for="avt">Vanaf</label><select class="input" id="avt" data-bind="a.tijdVan" data-num="1">${tijdOpties(a.tijdVan, C.DAG_START, C.DAG_EIND - C.BLOK)}</select></div>
+    </div>
+    <div class="two">
+      <div class="field"><label for="at">Tot en met datum</label><input class="input" type="date" id="at" data-bind="a.tot" value="${a.tot}"></div>
+      <div class="field"><label for="att">Tot</label><select class="input" id="att" data-bind="a.tijdTot" data-num="1">${tijdOpties(a.tijdTot, C.DAG_START + C.BLOK, C.DAG_EIND)}</select></div>
+    </div>
+    <div class="field"><label for="ar">Reden (optioneel)</label><input class="input" id="ar" data-bind="a.reden" placeholder="Vakantie, vrije dag, pauze…" value="${esc(a.reden)}"></div>
+    <div class="hint">Bestaande afspraken in deze periode blijven staan; controleer die zelf even.</div>`;
+  return { titel: 'Afwezigheid', body, footer: `<button class="primary" data-action="bewaarafw">Opslaan</button>` };
+}
+
+async function bewaarAfw() {
+  const a = S.sheet.a;
+  if (!a.med || !a.van || !a.tot) { toast('Vul medewerker en datums in'); return; }
+  const s = atMin(fromKey(a.van), a.tijdVan), e = atMin(fromKey(a.tot), a.tijdTot);
+  if (e <= s) { toast('Het einde moet na het begin liggen'); return; }
+  const { error } = await sb.from('afwezigheid').insert({ medewerker_id: a.med, start_tijd: s.toISOString(), eind_tijd: e.toISOString(), reden: a.reden.trim() || null });
+  if (error) { toast(foutmelding(error)); return; }
+  closeSheet();
+  toast('Afwezigheid opgeslagen');
+  await refresh();
+}
+
+// ===================================================================
+// Acties
+// ===================================================================
+const acties = {
+  async view(el) {
+    S.view = el.dataset.v;
+    if (S.view === 'dag' && !isOpen(S.date)) S.date = nextOpen(S.date);
+    render();
+    await refresh();
+  },
+  async prev() {
+    S.date = S.view === 'week' ? addDays(S.date, -7) : nextOpen(addDays(S.date, -1), -1);
+    render(); await refresh();
+  },
+  async next() {
+    S.date = S.view === 'week' ? addDays(S.date, 7) : nextOpen(addDays(S.date, 1), 1);
+    render(); await refresh();
+  },
+  async vandaag() { S.date = S.view === 'week' ? today() : nextOpen(today()); render(); await refresh(); },
+  async goday(el) { S.date = fromKey(el.dataset.date); S.view = 'dag'; render(); await refresh(); },
+  nieuw() { openNieuw(); },
+  slot(el, ev) {
+    const r = el.getBoundingClientRect();
+    const slot = Math.floor((ev.clientY - r.top) / cssVarPx('--slot'));
+    if (slot < 0 || slot >= NSLOTS) return;
+    openNieuw({ med: Number(el.dataset.med), date: key(S.date), slot });
+  },
+  appt(el) {
+    const a = S.appts.find((x) => x.id === Number(el.dataset.id));
+    if (!a) return;
+    S.sheet = { type: 'appt', a };
+    renderSheet();
+  },
+  async annuleer() {
+    const a = S.sheet.a;
+    if (!confirm(`Afspraak van ${a.klant?.naam || 'deze klant'} annuleren?`)) return;
+    const { error } = await sb.from('afspraken').update({ geannuleerd: true }).eq('id', a.id);
+    if (error) { toast(foutmelding(error)); return; }
+    closeSheet();
+    toast('Afspraak geannuleerd');
+    await refresh();
+  },
+  sluit() { closeSheet(); },
+  sluitbuiten(el, ev) { if (ev.target === el) closeSheet(); },
+
+  // nieuwe afspraak
+  kiesmed(el) { S.sheet.med = Number(el.dataset.id); S.sheet.slot = null; renderSheet(); },
+  kiesbeh(el) {
+    const id = Number(el.dataset.id), F = S.sheet;
+    F.beh = F.beh.includes(id) ? F.beh.filter((x) => x !== id) : [...F.beh, id];
+    renderSheet();
+  },
+  kiestijd(el) { S.sheet.slot = Number(el.dataset.slot); renderSheet(); },
+  kiesdoor(el) { S.sheet.door = Number(el.dataset.id); renderSheet(); },
+  kiesklant(el) {
+    const F = S.sheet;
+    F.klant = F.results.find((k) => k.id === Number(el.dataset.id));
+    renderSheet();
+  },
+  wisklant() { Object.assign(S.sheet, { klant: null, kq: '', results: [] }); renderSheet(); },
+  nieuweklantinline() {
+    const F = S.sheet;
+    F.nieuweKlant = true;
+    if (F.kq && !/^\+?[\d\s-]+$/.test(F.kq)) F.kNaam = F.kq;
+    else if (F.kq) F.kTel = F.kq;
+    renderSheet();
+  },
+  zoekklant() { S.sheet.nieuweKlant = false; renderSheet(); },
+  opslaan() { opslaanAfspraak(); },
+
+  // klanten
+  klant(el) { openKlant(Number(el.dataset.id)); },
+  nieuweklant() { openKlant(null); },
+  bewaarklant() { bewaarKlant(); },
+
+  // instellingen
+  beh(el) {
+    const b = S.beh.find((x) => x.id === Number(el.dataset.id));
+    S.sheet = { type: 'beh', b: { ...b } };
+    renderSheet();
+  },
+  nieuwebeh() {
+    const max = S.beh.reduce((m, b) => Math.max(m, b.volgorde || 0), 0);
+    S.sheet = { type: 'beh', b: { naam: '', duur_min: 30, volgorde: max + 1, actief: true } };
+    renderSheet();
+  },
+  bewaarbeh() { bewaarBeh(); },
+  nieuweafw() {
+    const d = key(nextOpen(today()));
+    S.sheet = { type: 'afw', a: { med: actieveMeds()[0]?.id, van: d, tot: d, tijdVan: C.DAG_START, tijdTot: C.DAG_EIND, reden: '' } };
+    renderSheet();
+  },
+  afwmed(el) { S.sheet.a.med = Number(el.dataset.id); renderSheet(); },
+  bewaarafw() { bewaarAfw(); },
+  async delafw(el) {
+    if (!confirm('Deze afwezigheid verwijderen?')) return;
+    const { error } = await sb.from('afwezigheid').delete().eq('id', Number(el.dataset.id));
+    if (error) { toast(foutmelding(error)); return; }
+    await refresh();
+  },
+  async logout() {
+    if (!confirm('Uitloggen op dit apparaat?')) return;
+    await sb.auth.signOut();
+  },
+};
+
+document.addEventListener('click', (ev) => {
+  const el = ev.target.closest('[data-action]');
+  if (!el) return;
+  const f = acties[el.dataset.action];
+  if (f) f(el, ev);
+});
+
+// Invoervelden koppelen aan de toestand van de pop-up
+function setPath(obj, path, val) {
+  const delen = path.split('.');
+  let o = obj;
+  for (let i = 0; i < delen.length - 1; i++) o = o[delen[i]];
+  o[delen[delen.length - 1]] = val;
+}
+
+let zoekTimer;
+document.addEventListener('input', (ev) => {
+  const el = ev.target;
+  if (el.dataset.zoek === 'lijst') {
+    S.kq = el.value;
+    clearTimeout(zoekTimer);
+    zoekTimer = setTimeout(async () => {
+      try { await loadKlanten(); const l = document.getElementById('klijst'); if (l) l.innerHTML = klantRijen(); }
+      catch (e) { toast(foutmelding(e)); }
+    }, 250);
+    return;
+  }
+  if (el.dataset.zoek === 'sheet' && S.sheet) {
+    S.sheet.kq = el.value;
+    clearTimeout(zoekTimer);
+    zoekTimer = setTimeout(zoekKlantenSheet, 250);
+    return;
+  }
+  if (el.dataset.bind && S.sheet && el.type !== 'checkbox' && el.tagName !== 'SELECT' && el.type !== 'date') {
+    setPath(S.sheet, el.dataset.bind, el.dataset.num ? Number(el.value) : el.value);
+    if (S.sheet.type === 'nieuw' && el.dataset.bind === 'kNaam') {
+      const btn = sheetEl.querySelector('[data-action="opslaan"]');
+      const F = S.sheet;
+      if (btn) btn.disabled = !((F.klant || F.kNaam.trim()) && F.med && duurVan(F) && F.slot !== null && F.door);
+    }
+  }
+});
+
+document.addEventListener('change', (ev) => {
+  const el = ev.target;
+  if (!el.dataset.bind || !S.sheet) return;
+  let val = el.type === 'checkbox' ? el.checked : el.value;
+  if (el.dataset.num) val = Number(val);
+  setPath(S.sheet, el.dataset.bind, val);
+  if (el.dataset.reload && S.sheet.type === 'nieuw') { S.sheet.slot = null; laadVrij(); }
+});
+
+document.addEventListener('submit', async (ev) => {
+  const f = ev.target;
+  if (f.dataset.form !== 'login') return;
+  ev.preventDefault();
+  const btn = f.querySelector('button');
+  btn.disabled = true; btn.textContent = 'Bezig…';
+  const { error } = await sb.auth.signInWithPassword({ email: f.email.value.trim(), password: f.password.value });
+  if (error) { app.innerHTML = loginHtml('Inloggen mislukt: controleer e-mail en wachtwoord.'); return; }
+});
+
+document.addEventListener('keydown', (ev) => {
+  if (ev.key === 'Escape' && S.sheet) closeSheet();
+});
+
+// ===================================================================
+// Opstarten
+// ===================================================================
+let kanaal = null;
+async function start() {
+  try {
+    await loadBase();
+    await loadRange();
+  } catch (e) { toast(foutmelding(e)); }
+  render();
+  if (!kanaal) {
+    kanaal = sb.channel('salon')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'afspraken' }, () => refresh())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'afwezigheid' }, () => refresh())
+      .subscribe();
+  }
+}
+
+sb.auth.onAuthStateChange((event, session) => {
+  const wasIn = !!S.session;
+  S.session = session;
+  if (session && !wasIn) setTimeout(start, 0);
+  if (!session) {
+    if (kanaal) { sb.removeChannel(kanaal); kanaal = null; }
+    closeSheet();
+    render();
+  }
+});
+
+// Elke minuut de "nu"-lijn bijwerken; bij terugkeren naar de app verversen
+setInterval(() => { if (S.session && S.view === 'dag' && !S.sheet) render(); }, 60000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden && S.session) refresh(); });
+
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+
+(async () => {
+  const { data } = await sb.auth.getSession();
+  if (!data.session) { S.session = null; render(); }
+})();
