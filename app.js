@@ -29,6 +29,7 @@ function isoWeek(d) {
 const DAGEN = ['zondag', 'maandag', 'dinsdag', 'woensdag', 'donderdag', 'vrijdag', 'zaterdag'];
 const DAGK = ['ZO', 'MA', 'DI', 'WO', 'DO', 'VR', 'ZA'];
 const MAAND = ['jan', 'feb', 'mrt', 'apr', 'mei', 'jun', 'jul', 'aug', 'sep', 'okt', 'nov', 'dec'];
+const COPYRIGHT = '© 2026 Ilja Lemmens · Gemaakt voor Kapsalon van de Ven';
 const MAANDLANG = ['januari', 'februari', 'maart', 'april', 'mei', 'juni', 'juli', 'augustus', 'september', 'oktober', 'november', 'december'];
 const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 const fmtDate = (d) => `${DAGK[d.getDay()].toLowerCase()} ${d.getDate()} ${MAAND[d.getMonth()]}`;
@@ -245,6 +246,7 @@ function loginHtml(fout = '') {
     <div class="field"><label for="pw">Wachtwoord</label><input class="input" id="pw" name="password" type="password" autocomplete="current-password" required></div>
     ${fout ? `<div class="err">${esc(fout)}</div>` : ''}
     <button class="primary" type="submit">Inloggen</button>
+    <p class="copy">${COPYRIGHT}</p>
   </form></div>`;
 }
 
@@ -430,6 +432,7 @@ function instellingenHtml() {
     <section><h2>AFWEZIGHEID / VAKANTIE</h2><div class="list">${afw}</div>
       <button class="secondary" style="margin-top:10px" data-action="nieuweafw">+ Afwezigheid</button></section>
     <section><h2>ACCOUNT</h2><button class="secondary danger" data-action="logout">Uitloggen</button></section>
+    <p class="copy">${COPYRIGHT}</p>
   </div>`;
 }
 
