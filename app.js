@@ -402,6 +402,7 @@ async function openNieuw(opts = {}) {
   const d = opts.date ? fromKey(opts.date) : (isOpen(S.date) ? S.date : nextOpen(S.date));
   S.sheet = {
     type: 'nieuw',
+    editId: null,
     klant: null, nieuweKlant: false, kq: '', results: [], kNaam: '', kTel: '',
     med: opts.med ?? meds[0]?.id,
     beh: [],
@@ -412,6 +413,20 @@ async function openNieuw(opts = {}) {
     dag: null,
     bezig: false,
   };
+  if (opts.edit) {
+    const a = opts.edit;
+    const s = new Date(a.start_tijd);
+    Object.assign(S.sheet, {
+      editId: a.id,
+      klant: a.klant || null,
+      med: a.medewerker_id,
+      beh: (a.afspraak_behandelingen || []).map((x) => x.behandeling?.id).filter(Boolean),
+      date: key(s),
+      slot: (minOfDay(s) - C.DAG_START) / C.BLOK,
+      door: a.ingepland_door || S.sheet.door,
+      notitie: a.notitie || '',
+    });
+  }
   renderSheet();
   await laadVrij();
 }
@@ -436,7 +451,8 @@ function vrijeTijden(F) {
   const d = fromKey(F.date);
   const n = duurVan(F) / C.BLOK;
   if (!F.dag || !n || !F.med || !isOpen(d)) return [];
-  return vrijeStarts(bezet(F.med, d, F.dag.appts, F.dag.afw), n, d);
+  const appts = F.editId ? F.dag.appts.filter((a) => a.id !== F.editId) : F.dag.appts; // eigen afspraak telt niet als bezet
+  return vrijeStarts(bezet(F.med, d, appts, F.dag.afw), n, d);
 }
 
 function klantResultaten(F) {
@@ -493,7 +509,7 @@ function nieuwSheet(F) {
     <div class="field"><label for="notitie">Notitie (optioneel)</label>
       <textarea class="input" id="notitie" data-bind="notitie">${esc(F.notitie)}</textarea></div>`;
   const footer = `<button class="primary" data-action="opslaan" ${klaar ? '' : 'disabled'}>${F.bezig ? 'Opslaan…' : 'Opslaan' + tijdTekst}</button>`;
-  return { titel: 'Nieuwe afspraak', body, footer };
+  return { titel: F.editId ? 'Afspraak verplaatsen' : 'Nieuwe afspraak', body, footer };
 }
 
 async function zoekKlantenSheet() {
@@ -523,23 +539,34 @@ async function opslaanAfspraak() {
     const d = fromKey(F.date);
     const start = atMin(d, C.DAG_START + F.slot * C.BLOK);
     const eind = new Date(start.getTime() + duurVan(F) * 60000);
-    const { data: afspraak, error } = await sb.from('afspraken').insert({
+    const rij = {
       klant_id: F.klant.id,
       medewerker_id: F.med,
       start_tijd: start.toISOString(),
       eind_tijd: eind.toISOString(),
       notitie: F.notitie.trim() || null,
       ingepland_door: F.door,
-    }).select('id').single();
-    if (error) throw error;
-    const { error: e2 } = await sb.from('afspraak_behandelingen').insert(F.beh.map((id) => ({ afspraak_id: afspraak.id, behandeling_id: id })));
+    };
+    let afspraakId = F.editId;
+    if (F.editId) {
+      const { error } = await sb.from('afspraken').update(rij).eq('id', F.editId);
+      if (error) throw error;
+      const { error: eDel } = await sb.from('afspraak_behandelingen').delete().eq('afspraak_id', F.editId);
+      if (eDel) throw eDel;
+    } else {
+      const { data, error } = await sb.from('afspraken').insert(rij).select('id').single();
+      if (error) throw error;
+      afspraakId = data.id;
+    }
+    const { error: e2 } = await sb.from('afspraak_behandelingen').insert(F.beh.map((id) => ({ afspraak_id: afspraakId, behandeling_id: id })));
     if (e2) throw e2;
     localStorage.setItem('ingepland_door', String(F.door));
+    const wasEdit = !!F.editId;
     closeSheet();
     if (S.view !== 'week') S.view = 'dag';
     S.date = d;
     await refresh();
-    toast(`Afspraak opgeslagen: ${fmtDate(d)} ${fmtTime(start)}`);
+    toast(`${wasEdit ? 'Afspraak verplaatst naar' : 'Afspraak opgeslagen:'} ${fmtDate(d)} ${fmtTime(start)}`);
   } catch (e) {
     F.bezig = false;
     toast(foutmelding(e));
@@ -564,7 +591,8 @@ function apptSheet(F) {
       <dt>Ingepland door</dt><dd>${esc(door?.naam || '—')}</dd>
     </dl>
     ${a.klant ? `<button class="secondary" data-action="klant" data-id="${a.klant.id}">Klantkaart openen</button>` : ''}`;
-  const footer = `<button class="secondary danger" data-action="annuleer">Afspraak annuleren</button>`;
+  const footer = `<button class="primary" data-action="verplaats">Verplaatsen / wijzigen</button>
+    <button class="secondary danger" data-action="annuleer">Afspraak annuleren</button>`;
   return { titel: 'Afspraak', body, footer };
 }
 
@@ -708,6 +736,7 @@ const acties = {
     S.sheet = { type: 'appt', a };
     renderSheet();
   },
+  verplaats() { openNieuw({ edit: S.sheet.a }); },
   async annuleer() {
     const a = S.sheet.a;
     if (!confirm(`Afspraak van ${a.klant?.naam || 'deze klant'} annuleren?`)) return;
