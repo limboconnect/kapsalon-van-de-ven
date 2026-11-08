@@ -30,7 +30,7 @@ const DAGEN = ['zondag', 'maandag', 'dinsdag', 'woensdag', 'donderdag', 'vrijdag
 const DAGK = ['ZO', 'MA', 'DI', 'WO', 'DO', 'VR', 'ZA'];
 const MAAND = ['jan', 'feb', 'mrt', 'apr', 'mei', 'jun', 'jul', 'aug', 'sep', 'okt', 'nov', 'dec'];
 // Versie van deze app; moet gelijk zijn aan version.json (bij elke wijziging ophogen)
-const APP_VERSIE = '2026.11.08-3';
+const APP_VERSIE = '2026.11.08-4';
 const COPYRIGHT = '© 2026 Ilja Lemmens · Gemaakt voor Kapsalon van de Ven';
 const MAANDLANG = ['januari', 'februari', 'maart', 'april', 'mei', 'juni', 'juli', 'augustus', 'september', 'oktober', 'november', 'december'];
 const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
@@ -803,7 +803,7 @@ function apptSheet(F) {
   const door = medById(a.ingepland_door);
   const tel = a.klant?.telefoon;
   const body = `<dl class="kv">
-      <dt>Klant</dt><dd>${esc(a.klant?.naam || '—')}</dd>
+      <dt>Klant</dt><dd>${a.klant ? esc(a.klant.naam) : '<span class="sub">Klant verwijderd</span>'}</dd>
       ${tel ? `<dt>Telefoon</dt><dd><a href="tel:${esc(tel.replace(/\s/g, ''))}">${esc(tel)}</a></dd>` : ''}
       <dt>Wanneer</dt><dd>${cap(DAGEN[s.getDay()])} ${s.getDate()} ${MAAND[s.getMonth()]} · ${fmtTime(s)} – ${fmtTime(e)}</dd>
       <dt>Medewerker</dt><dd><span class="dot" style="display:inline-block;background:${m?.kleur}"></span> ${esc(m?.naam || '?')}</dd>
@@ -852,7 +852,9 @@ function klantSheet(F) {
     <div class="field"><label for="ke">E-mail</label><input class="input" id="ke" data-bind="k.email" type="email" value="${esc(k.email || '')}"></div>
     <div class="field"><label for="kno">Notities</label><textarea class="input" id="kno" data-bind="k.notities">${esc(k.notities || '')}</textarea></div>
     ${k.id ? `<div class="field"><span class="lbl">Afspraken (nieuwste eerst)</span>${hist}</div>` : ''}`;
-  return { titel: k.id ? 'Klant' : 'Nieuwe klant', body, footer: `<button class="primary" data-action="bewaarklant">Opslaan</button>` };
+  const footer = `<button class="primary" data-action="bewaarklant">Opslaan</button>${k.id ? `
+    <button class="secondary danger" data-action="verwijderklant">Klant verwijderen</button>` : ''}`;
+  return { titel: k.id ? 'Klant' : 'Nieuwe klant', body, footer };
 }
 
 async function bewaarKlant() {
@@ -866,6 +868,29 @@ async function bewaarKlant() {
   closeSheet();
   klantenGeladenOp = 0;
   toast('Klant opgeslagen');
+  await refresh();
+}
+
+// Verwijderen mag alleen zonder toekomstige afspraken; oude afspraken blijven staan zonder naam
+async function verwijderKlant() {
+  const k = S.sheet.k;
+  const { data, error } = await sb.from('afspraken').select('start_tijd')
+    .eq('klant_id', k.id).eq('geannuleerd', false).gte('eind_tijd', new Date().toISOString()).order('start_tijd');
+  if (error) { speel('fout'); toast(foutmelding(error)); return; }
+  if (data.length) {
+    const lijst = data.slice(0, 5).map((a) => { const d = new Date(a.start_tijd); return `• ${fmtDate(d)} ${d.getFullYear()} · ${fmtTime(d)}`; }).join('\n');
+    const meer = data.length > 5 ? `\n… en nog ${data.length - 5}` : '';
+    alert(`${k.naam} heeft nog ${data.length === 1 ? 'een afspraak' : data.length + ' afspraken'} staan:\n${lijst}${meer}\n\nAnnuleer die eerst; daarna kun je de klant verwijderen.`);
+    return;
+  }
+  if (!confirm(`${k.naam} verwijderen?\n\nOude afspraken blijven in de agenda staan, maar zonder naam. Dit kun je niet ongedaan maken.`)) return;
+  const { error: e2 } = await sb.from('klanten').delete().eq('id', k.id);
+  if (e2) { speel('fout'); toast(foutmelding(e2)); return; }
+  speel('ok');
+  closeSheet();
+  klantenGeladenOp = 0;
+  if (S.alleKlanten) S.alleKlanten = S.alleKlanten.filter((x) => x.id !== k.id);
+  toast('Klant verwijderd');
   await refresh();
 }
 
@@ -1200,6 +1225,7 @@ const acties = {
   klant(el) { openKlant(Number(el.dataset.id)); },
   nieuweklant() { openKlant(null); },
   bewaarklant() { bewaarKlant(); },
+  verwijderklant() { verwijderKlant(); },
 
   // instellingen
   beh(el) {

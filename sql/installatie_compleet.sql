@@ -7,6 +7,7 @@
 --   1. database.sql                     tabellen, regels, beveiliging, startgegevens
 --   2. sql/02_backup_alleen_lezen.sql   back-upaccount alleen-lezen
 --   3. sql/03_sluitingsdagen.sql        sluitingsdagen en feestdagen
+--   4. sql/04_klant_verwijderen.sql     controle overslaan als tijd/kapper niet wijzigt
 --
 -- Let op: heeft het back-upaccount een ander e-mailadres dan
 -- backup@synology.nl, pas dat dan hieronder aan (zoek op "synology").
@@ -114,6 +115,12 @@ declare
   e timestamp := new.eind_tijd  at time zone 'Europe/Amsterdam';
 begin
   if new.geannuleerd then
+    return new;
+  end if;
+  -- Tijd en kapper niet gewijzigd (bv. klant verwijderd, notitie aangepast): niet opnieuw controleren
+  if tg_op = 'UPDATE' and not old.geannuleerd
+     and new.start_tijd = old.start_tijd and new.eind_tijd = old.eind_tijd
+     and new.medewerker_id = old.medewerker_id then
     return new;
   end if;
   if extract(isodow from s) not between 2 and 6 then
@@ -255,6 +262,12 @@ declare
   reden text;
 begin
   if new.geannuleerd then
+    return new;
+  end if;
+  -- Tijd en kapper niet gewijzigd (bv. klant verwijderd, notitie aangepast): niet opnieuw controleren
+  if tg_op = 'UPDATE' and not old.geannuleerd
+     and new.start_tijd = old.start_tijd and new.eind_tijd = old.eind_tijd
+     and new.medewerker_id = old.medewerker_id then
     return new;
   end if;
   if extract(isodow from s) not between 2 and 6 then
