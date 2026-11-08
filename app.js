@@ -234,13 +234,60 @@ function haalBurenOp() {
 let laatstGetekend = '';
 const vingerafdruk = () => JSON.stringify([S.view, key(S.date), S.appts, S.afw, S.meds, S.beh, S.sluit]);
 
-async function loadKlanten() {
-  let q = sb.from('klanten').select('*').order('naam').limit(60);
-  const zoek = S.kq.trim().replace(/[,()%*]/g, ' ').trim();
-  if (zoek) q = q.or(`naam.ilike.%${zoek}%,telefoon.ilike.%${zoek}%`);
-  const { data, error } = await q;
-  if (error) throw error;
-  S.klanten = data;
+// Alle klanten (naam + telefoon) in één keer laden, per 1000 tegelijk
+const sorteer = new Intl.Collator('nl', { sensitivity: 'base', numeric: true });
+let klantenGeladenOp = 0;
+async function laadAlleKlanten(forceer = false) {
+  if (!forceer && S.alleKlanten && Date.now() - klantenGeladenOp < 60000) return;
+  const alle = [];
+  for (let van = 0; ; van += 1000) {
+    const { data, error } = await sb.from('klanten').select('id,naam,telefoon').order('naam').range(van, van + 999);
+    if (error) throw error;
+    alle.push(...data);
+    if (data.length < 1000) break;
+  }
+  alle.sort((a, b) => sorteer.compare(a.naam || '', b.naam || ''));
+  S.alleKlanten = alle;
+  klantenGeladenOp = Date.now();
+}
+
+// Beginletter voor de groepering (É → E, cijfers e.d. → #)
+function beginletter(naam) {
+  const c = (naam || '').trim().normalize('NFD').replace(/[̀-ͯ]/g, '').charAt(0).toUpperCase();
+  return /[A-Z]/.test(c) ? c : '#';
+}
+
+const zonderAccent = (s) => (s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+function filterKlanten(q) {
+  const lijst = S.alleKlanten || [];
+  const t = zonderAccent(q).trim();
+  if (!t) return lijst;
+  const cijfers = t.replace(/\D/g, '');
+  return lijst.filter((k) => zonderAccent(k.naam).includes(t)
+    || (cijfers.length >= 3 && (k.telefoon || '').replace(/\D/g, '').includes(cijfers)));
+}
+
+// Lijst met letterkopjes en een A–Z-balk; actie = wat een tik op een klant doet
+const LETTERS = [...'ABCDEFGHIJKLMNOPQRSTUVWXYZ', '#'];
+function klantLijstHtml(lijst, actie, prefix, leegTekst) {
+  if (!S.alleKlanten) return '<div class="empty">Klanten laden…</div>';
+  if (!lijst.length) return `<div class="empty">${leegTekst}</div>`;
+  const groepen = new Map();
+  for (const k of lijst) {
+    const l = beginletter(k.naam);
+    if (!groepen.has(l)) groepen.set(l, []);
+    groepen.get(l).push(k);
+  }
+  const volgorde = LETTERS.filter((l) => groepen.has(l));
+  const html = volgorde.map((l) => `<div class="kgroep" id="${prefix}-${l === '#' ? 'hekje' : l}">
+      <div class="kletter">${l}</div>
+      ${groepen.get(l).map((k) => `<button class="row" data-action="${actie}" data-id="${k.id}">
+        <span>${esc(k.naam)}<br><span class="sub">${esc(k.telefoon || '')}</span></span>${actie === 'klant' ? ICON.right : ''}</button>`).join('')}
+    </div>`).join('');
+  const balk = lijst.length > 12 ? `<div class="azbar" data-prefix="${prefix}" aria-label="Spring naar letter">
+      ${LETTERS.map((l) => `<button data-action="azspring" data-l="${l}" ${groepen.has(l) ? '' : 'disabled'} tabindex="-1">${l}</button>`).join('')}
+    </div>` : '';
+  return `<div class="azwrap"><div class="azscroll list">${html}</div>${balk}</div>`;
 }
 
 async function loadAfwLijst() {
@@ -258,7 +305,7 @@ async function refresh(opts = {}) {
       haalBurenOp();
       return;
     }
-    if (S.view === 'klanten') await loadKlanten();
+    if (S.view === 'klanten') await laadAlleKlanten(true);
     else if (S.view === 'instellingen') await Promise.all([loadBase(), loadAfwLijst()]);
     render();
   } catch (e) { toast(foutmelding(e)); }
@@ -480,17 +527,18 @@ function weekHtml() {
 }
 
 function klantRijen() {
-  if (!S.klanten.length) return `<div class="empty">${S.kq ? 'Geen klanten gevonden.' : 'Nog geen klanten.'}</div>`;
-  return S.klanten.map((k) => `<button class="row" data-action="klant" data-id="${k.id}">
-      <span>${esc(k.naam)}<br><span class="sub">${esc(k.telefoon || '')}</span></span>${ICON.right}</button>`).join('');
+  return klantLijstHtml(filterKlanten(S.kq), 'klant', 'kl', S.kq ? 'Geen klanten gevonden.' : 'Nog geen klanten.');
 }
 
 function klantenHtml() {
-  return `<div class="page">
-    <div class="field"><label for="kzoek">Zoeken op naam of telefoon</label>
-      <input class="input" id="kzoek" data-zoek="lijst" value="${esc(S.kq)}" autocomplete="off"></div>
-    <div class="list" id="klijst">${klantRijen()}</div>
-    <button class="secondary" data-action="nieuweklant">+ Nieuwe klant</button>
+  const n = (S.alleKlanten || []).length;
+  return `<div class="page klantpage">
+    <div class="klantkop">
+      <input class="input" id="kzoek" data-zoek="lijst" value="${esc(S.kq)}" placeholder="Zoek op naam of telefoon" autocomplete="off" aria-label="Zoeken op naam of telefoon">
+      <button class="iconbtn" data-action="nieuweklant" aria-label="Nieuwe klant">${ICON.plus}</button>
+    </div>
+    <div class="hint" id="kaantal">${S.alleKlanten ? `${n} klant${n === 1 ? '' : 'en'}` : ''}</div>
+    <div id="klijst" class="klijst">${klantRijen()}</div>
   </div>`;
 }
 
@@ -565,6 +613,7 @@ function closeSheet() { S.sheet = null; renderSheet(); }
 // ---------- Nieuwe afspraak ----------
 async function openNieuw(opts = {}) {
   const meds = actieveMeds();
+  laadAlleKlanten().then(() => { if (S.sheet?.type === 'nieuw') zoekKlantenSheet(); }).catch((e) => toast(foutmelding(e)));
   const d = opts.date ? fromKey(opts.date) : (isOpen(S.date) ? S.date : nextOpen(S.date));
   S.sheet = {
     type: 'nieuw',
@@ -622,9 +671,7 @@ function vrijeTijden(F) {
 }
 
 function klantResultaten(F) {
-  if (!F.kq.trim()) return '';
-  if (!F.results.length) return '<div class="hint">Geen klant gevonden.</div>';
-  return `<div class="results">${F.results.map((k) => `<button data-action="kiesklant" data-id="${k.id}">${esc(k.naam)} <span class="hint">${esc(k.telefoon || '')}</span></button>`).join('')}</div>`;
+  return klantLijstHtml(filterKlanten(F.kq), 'kiesklant', 'kk', 'Geen klant gevonden. Tik op + Nieuwe klant.');
 }
 
 function nieuwSheet(F) {
@@ -645,7 +692,7 @@ function nieuwSheet(F) {
       <button class="textbtn" style="align-self:flex-start" data-action="zoekklant">Bestaande klant zoeken</button>`;
   } else {
     klant = `<input class="input" id="kq" data-zoek="sheet" placeholder="Zoek op naam of telefoon" value="${esc(F.kq)}" autocomplete="off" aria-label="Klant zoeken">
-      <div id="kresults">${klantResultaten(F)}</div>
+      <div id="kresults" class="kkiezer">${klantResultaten(F)}</div>
       <button class="textbtn" style="align-self:flex-start" data-action="nieuweklantinline">+ Nieuwe klant</button>`;
   }
 
@@ -679,19 +726,11 @@ function nieuwSheet(F) {
   return { titel: F.editId ? 'Afspraak verplaatsen' : 'Nieuwe afspraak', body, footer };
 }
 
-async function zoekKlantenSheet() {
+function zoekKlantenSheet() {
   const F = S.sheet;
   if (!F || F.type !== 'nieuw') return;
-  const zoek = F.kq.trim().replace(/[,()%*]/g, ' ').trim();
-  if (zoek.length < 2) { F.results = []; }
-  else {
-    const { data, error } = await sb.from('klanten').select('*')
-      .or(`naam.ilike.%${zoek}%,telefoon.ilike.%${zoek}%`).order('naam').limit(8);
-    if (error) { toast(foutmelding(error)); return; }
-    F.results = data;
-  }
   const box = document.getElementById('kresults');
-  if (box && S.sheet === F) box.innerHTML = klantResultaten(F);
+  if (box) { box.innerHTML = klantResultaten(F); const sc = box.querySelector('.azscroll'); if (sc) sc.scrollTop = 0; }
 }
 
 async function opslaanAfspraak() {
@@ -703,6 +742,7 @@ async function opslaanAfspraak() {
       const { data, error } = await sb.from('klanten').insert({ naam: F.kNaam.trim(), telefoon: F.kTel.trim() || null }).select().single();
       if (error) throw error;
       F.klant = data; F.nieuweKlant = false;
+      klantenGeladenOp = 0; // lijst bij volgende keer opnieuw laden
     }
     const d = fromKey(F.date);
     const start = atMin(d, C.DAG_START + F.slot * C.BLOK);
@@ -812,6 +852,7 @@ async function bewaarKlant() {
   const { error } = k.id ? await sb.from('klanten').update(rij).eq('id', k.id) : await sb.from('klanten').insert(rij);
   if (error) { toast(foutmelding(error)); return; }
   closeSheet();
+  klantenGeladenOp = 0;
   toast('Klant opgeslagen');
   await refresh();
 }
@@ -873,6 +914,27 @@ async function bewaarAfw() {
   toast('Afwezigheid opgeslagen');
   await refresh();
 }
+
+// ---------- A–Z-balk ----------
+function springNaarLetter(knop) {
+  const balk = knop.closest('.azbar');
+  const doel = document.getElementById(`${balk.dataset.prefix}-${knop.dataset.l === '#' ? 'hekje' : knop.dataset.l}`);
+  const sc = balk.parentElement.querySelector('.azscroll');
+  if (!doel || !sc) return;
+  sc.scrollTop = doel.offsetTop;
+  balk.querySelectorAll('.actief').forEach((b) => b.classList.remove('actief'));
+  knop.classList.add('actief');
+  clearTimeout(springNaarLetter.t);
+  springNaarLetter.t = setTimeout(() => knop.classList.remove('actief'), 600);
+}
+let azLaatste = null;
+document.addEventListener('touchmove', (e) => {
+  if (!e.target.closest || !e.target.closest('.azbar')) return;
+  const t = e.touches[0];
+  const knop = document.elementFromPoint(t.clientX, t.clientY)?.closest?.('.azbar button');
+  if (knop && !knop.disabled && knop !== azLaatste) { azLaatste = knop; springNaarLetter(knop); }
+}, { passive: true });
+document.addEventListener('touchend', () => { azLaatste = null; }, { passive: true });
 
 // ---------- Naar een andere datum ----------
 async function naarDatum(anim = null) {
@@ -1104,6 +1166,7 @@ const acties = {
     renderSheet();
   },
   verplaats() { openNieuw({ edit: S.sheet.a }); },
+  azspring(el) { springNaarLetter(el); },
   async annuleer() {
     const a = S.sheet.a;
     if (!confirm(`Afspraak van ${a.klant?.naam || 'deze klant'} annuleren?`)) return;
@@ -1129,7 +1192,7 @@ const acties = {
   kiesdoor(el) { S.sheet.door = Number(el.dataset.id); renderSheet(); },
   kiesklant(el) {
     const F = S.sheet;
-    F.klant = F.results.find((k) => k.id === Number(el.dataset.id));
+    F.klant = (S.alleKlanten || []).find((k) => k.id === Number(el.dataset.id));
     renderSheet();
   },
   wisklant() { Object.assign(S.sheet, { klant: null, kq: '', results: [] }); renderSheet(); },
@@ -1226,16 +1289,15 @@ document.addEventListener('input', (ev) => {
   if (el.dataset.zoek === 'lijst') {
     S.kq = el.value;
     clearTimeout(zoekTimer);
-    zoekTimer = setTimeout(async () => {
-      try { await loadKlanten(); const l = document.getElementById('klijst'); if (l) l.innerHTML = klantRijen(); }
-      catch (e) { toast(foutmelding(e)); }
-    }, 250);
+    zoekTimer = setTimeout(() => {
+      const l = document.getElementById('klijst'); if (l) l.innerHTML = klantRijen();
+    }, 120);
     return;
   }
   if (el.dataset.zoek === 'sheet' && S.sheet) {
     S.sheet.kq = el.value;
     clearTimeout(zoekTimer);
-    zoekTimer = setTimeout(zoekKlantenSheet, 250);
+    zoekTimer = setTimeout(zoekKlantenSheet, 120);
     return;
   }
   if (el.dataset.bind && S.sheet && el.type !== 'checkbox' && el.tagName !== 'SELECT' && el.type !== 'date') {
