@@ -29,6 +29,8 @@ function isoWeek(d) {
 const DAGEN = ['zondag', 'maandag', 'dinsdag', 'woensdag', 'donderdag', 'vrijdag', 'zaterdag'];
 const DAGK = ['ZO', 'MA', 'DI', 'WO', 'DO', 'VR', 'ZA'];
 const MAAND = ['jan', 'feb', 'mrt', 'apr', 'mei', 'jun', 'jul', 'aug', 'sep', 'okt', 'nov', 'dec'];
+// Versie van deze app; moet gelijk zijn aan version.json (bij elke wijziging ophogen)
+const APP_VERSIE = '2026.11.08-1';
 const COPYRIGHT = '© 2026 Ilja Lemmens · Gemaakt voor Kapsalon van de Ven';
 const MAANDLANG = ['januari', 'februari', 'maart', 'april', 'mei', 'juni', 'juli', 'augustus', 'september', 'oktober', 'november', 'december'];
 const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
@@ -576,7 +578,7 @@ function instellingenHtml() {
       </div></div>
       <button class="secondary" style="margin-top:10px" data-action="testgeluid">Geluiden testen</button></section>
     <section><h2>ACCOUNT</h2><button class="secondary danger" data-action="logout">Uitloggen</button></section>
-    <p class="copy">${COPYRIGHT}</p>
+    <p class="copy">${COPYRIGHT}<br>versie ${APP_VERSIE}</p>
   </div>`;
 }
 
@@ -1361,6 +1363,28 @@ setInterval(() => { if (S.session && S.view === 'dag' && !S.sheet && !bezigMetSc
 document.addEventListener('visibilitychange', () => { if (!document.hidden && S.session) { cache.clear(); refresh({ basis: true }); } });
 
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+
+// ---------- Nieuwe versie? Dan een balkje tonen (nooit vanzelf herladen) ----------
+async function controleerVersie() {
+  try {
+    const r = await fetch(`version.json?t=${Date.now()}`, { cache: 'no-store' });
+    if (!r.ok) return;
+    const { versie } = await r.json();
+    if (versie && versie !== APP_VERSIE) document.getElementById('update').hidden = false;
+  } catch { /* offline of niet bereikbaar: niets doen */ }
+}
+acties.bijwerken = async (el) => {
+  if (S.sheet?.type === 'nieuw' && !confirm('De afspraak die je invult is nog niet opgeslagen. Toch bijwerken?')) return;
+  if (el) { el.disabled = true; el.textContent = 'Bezig…'; }
+  try {
+    const reg = await navigator.serviceWorker?.getRegistration();
+    if (reg) await reg.update();
+  } catch { /* geen service worker: gewoon herladen */ }
+  location.reload();
+};
+controleerVersie();
+setInterval(controleerVersie, 5 * 60 * 1000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) controleerVersie(); });
 
 (async () => {
   const { data } = await sb.auth.getSession();
