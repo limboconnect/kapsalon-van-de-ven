@@ -287,7 +287,7 @@ function klantLijstHtml(lijst, actie, prefix, leegTekst) {
   const balk = lijst.length > 12 ? `<div class="azbar" data-prefix="${prefix}" aria-label="Spring naar letter">
       ${LETTERS.map((l) => `<button data-action="azspring" data-l="${l}" ${groepen.has(l) ? '' : 'disabled'} tabindex="-1">${l}</button>`).join('')}
     </div>` : '';
-  return `<div class="azwrap"><div class="azscroll list">${html}</div>${balk}</div>`;
+  return `<div class="azwrap ${balk ? 'metbalk' : ''}"><div class="azscroll list">${html}</div>${balk}</div>`;
 }
 
 async function loadAfwLijst() {
