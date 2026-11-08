@@ -30,7 +30,7 @@ const DAGEN = ['zondag', 'maandag', 'dinsdag', 'woensdag', 'donderdag', 'vrijdag
 const DAGK = ['ZO', 'MA', 'DI', 'WO', 'DO', 'VR', 'ZA'];
 const MAAND = ['jan', 'feb', 'mrt', 'apr', 'mei', 'jun', 'jul', 'aug', 'sep', 'okt', 'nov', 'dec'];
 // Versie van deze app; moet gelijk zijn aan version.json (bij elke wijziging ophogen)
-const APP_VERSIE = '2026.11.08-2';
+const APP_VERSIE = '2026.11.08-3';
 const COPYRIGHT = '© 2026 Ilja Lemmens · Gemaakt voor Kapsalon van de Ven';
 const MAANDLANG = ['januari', 'februari', 'maart', 'april', 'mei', 'juni', 'juli', 'augustus', 'september', 'oktober', 'november', 'december'];
 const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
@@ -260,6 +260,16 @@ function beginletter(naam) {
 }
 
 const zonderAccent = (s) => (s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+
+// Waarschuwen als er al een klant met precies deze naam bestaat (hoofdletters, accenten en spaties tellen niet)
+async function dubbeleNaamOk(naam, eigenId = null) {
+  const sleutel = (x) => zonderAccent(x).replace(/\s+/g, ' ').trim();
+  try { await laadAlleKlanten(true); } catch { return true; } // lukt het controleren niet, dan gewoon doorgaan
+  const zelfde = S.alleKlanten.filter((k) => k.id !== eigenId && sleutel(k.naam) === sleutel(naam));
+  if (!zelfde.length) return true;
+  const regels = zelfde.map((k) => `• ${k.naam}${k.telefoon ? ` (${k.telefoon})` : ' (geen telefoon)'}`).join('\n');
+  return confirm(`Er bestaat al een klant met deze naam:\n${regels}\n\nToch opslaan als aparte klant?\nTip: zet het telefoonnummer erbij of iets als (jr) achter de naam.`);
+}
 function filterKlanten(q) {
   const lijst = S.alleKlanten || [];
   const t = zonderAccent(q).trim();
@@ -734,6 +744,7 @@ function zoekKlantenSheet() {
 
 async function opslaanAfspraak() {
   const F = S.sheet;
+  if (!F.klant && F.nieuweKlant && !(await dubbeleNaamOk(F.kNaam))) return;
   F.bezig = true; renderSheet();
   eigenWijziging = Date.now(); // vóór het opslaan: de melding van de database kan eerder binnenkomen dan het antwoord
   try {
@@ -814,7 +825,7 @@ async function openKlant(id) {
     if (error) { toast(foutmelding(error)); return; }
     k = data;
   }
-  S.sheet = { type: 'klant', k, historie: null };
+  S.sheet = { type: 'klant', k, historie: null, oudeNaam: k.naam };
   renderSheet();
   if (id) {
     const { data, error } = await sb.from('afspraken')
@@ -847,6 +858,8 @@ function klantSheet(F) {
 async function bewaarKlant() {
   const k = S.sheet.k;
   if (!k.naam?.trim()) { toast('Vul een naam in'); return; }
+  const naamGewijzigd = !k.id || k.naam.trim() !== (S.sheet.oudeNaam || '').trim();
+  if (naamGewijzigd && !(await dubbeleNaamOk(k.naam, k.id || null))) return;
   const rij = { naam: k.naam.trim(), telefoon: k.telefoon?.trim() || null, email: k.email?.trim() || null, notities: k.notities?.trim() || null };
   const { error } = k.id ? await sb.from('klanten').update(rij).eq('id', k.id) : await sb.from('klanten').insert(rij);
   if (error) { toast(foutmelding(error)); return; }
