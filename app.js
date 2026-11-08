@@ -30,7 +30,7 @@ const DAGEN = ['zondag', 'maandag', 'dinsdag', 'woensdag', 'donderdag', 'vrijdag
 const DAGK = ['ZO', 'MA', 'DI', 'WO', 'DO', 'VR', 'ZA'];
 const MAAND = ['jan', 'feb', 'mrt', 'apr', 'mei', 'jun', 'jul', 'aug', 'sep', 'okt', 'nov', 'dec'];
 // Versie van deze app; moet gelijk zijn aan version.json (bij elke wijziging ophogen)
-const APP_VERSIE = '2026.11.08-4';
+const APP_VERSIE = '2026.11.08-5';
 const COPYRIGHT = '© 2026 Ilja Lemmens · Gemaakt voor Kapsalon van de Ven';
 const MAANDLANG = ['januari', 'februari', 'maart', 'april', 'mei', 'juni', 'juli', 'augustus', 'september', 'oktober', 'november', 'december'];
 const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
@@ -1422,7 +1422,9 @@ acties.bijwerken = async (el) => {
   location.reload();
 };
 controleerVersie();
-setInterval(controleerVersie, 5 * 60 * 1000);
+setInterval(controleerVersie, 60 * 1000); // elke minuut (klein bestandje)
+window.addEventListener('focus', controleerVersie);
+window.addEventListener('online', controleerVersie);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) controleerVersie(); });
 
 (async () => {
