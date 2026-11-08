@@ -267,7 +267,7 @@ function filterKlanten(q) {
     || (cijfers.length >= 3 && (k.telefoon || '').replace(/\D/g, '').includes(cijfers)));
 }
 
-// Lijst met letterkopjes en een A–Z-balk; actie = wat een tik op een klant doet
+// Lijst met letterkopjes; actie = wat een tik op een klant doet
 const LETTERS = [...'ABCDEFGHIJKLMNOPQRSTUVWXYZ', '#'];
 function klantLijstHtml(lijst, actie, prefix, leegTekst) {
   if (!S.alleKlanten) return '<div class="empty">Klanten laden…</div>';
@@ -284,10 +284,7 @@ function klantLijstHtml(lijst, actie, prefix, leegTekst) {
       ${groepen.get(l).map((k) => `<button class="row" data-action="${actie}" data-id="${k.id}">
         <span>${esc(k.naam)}<br><span class="sub">${esc(k.telefoon || '')}</span></span>${actie === 'klant' ? ICON.right : ''}</button>`).join('')}
     </div>`).join('');
-  const balk = lijst.length > 12 ? `<div class="azbar" data-prefix="${prefix}" aria-label="Spring naar letter">
-      ${LETTERS.map((l) => `<button data-action="azspring" data-l="${l}" ${groepen.has(l) ? '' : 'disabled'} tabindex="-1">${l}</button>`).join('')}
-    </div>` : '';
-  return `<div class="azwrap ${balk ? 'metbalk' : ''}"><div class="azscroll list">${html}</div>${balk}</div>`;
+  return `<div class="azwrap"><div class="azscroll list">${html}</div></div>`;
 }
 
 async function loadAfwLijst() {
@@ -915,27 +912,6 @@ async function bewaarAfw() {
   await refresh();
 }
 
-// ---------- A–Z-balk ----------
-function springNaarLetter(knop) {
-  const balk = knop.closest('.azbar');
-  const doel = document.getElementById(`${balk.dataset.prefix}-${knop.dataset.l === '#' ? 'hekje' : knop.dataset.l}`);
-  const sc = balk.parentElement.querySelector('.azscroll');
-  if (!doel || !sc) return;
-  sc.scrollTop = doel.offsetTop;
-  balk.querySelectorAll('.actief').forEach((b) => b.classList.remove('actief'));
-  knop.classList.add('actief');
-  clearTimeout(springNaarLetter.t);
-  springNaarLetter.t = setTimeout(() => knop.classList.remove('actief'), 600);
-}
-let azLaatste = null;
-document.addEventListener('touchmove', (e) => {
-  if (!e.target.closest || !e.target.closest('.azbar')) return;
-  const t = e.touches[0];
-  const knop = document.elementFromPoint(t.clientX, t.clientY)?.closest?.('.azbar button');
-  if (knop && !knop.disabled && knop !== azLaatste) { azLaatste = knop; springNaarLetter(knop); }
-}, { passive: true });
-document.addEventListener('touchend', () => { azLaatste = null; }, { passive: true });
-
 // ---------- Naar een andere datum ----------
 async function naarDatum(anim = null) {
   // uit de cache tonen als die er is, anders leeg (nooit de afspraken van de vorige dag)
@@ -1166,7 +1142,6 @@ const acties = {
     renderSheet();
   },
   verplaats() { openNieuw({ edit: S.sheet.a }); },
-  azspring(el) { springNaarLetter(el); },
   async annuleer() {
     const a = S.sheet.a;
     if (!confirm(`Afspraak van ${a.klant?.naam || 'deze klant'} annuleren?`)) return;
